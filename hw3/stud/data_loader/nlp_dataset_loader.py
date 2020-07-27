@@ -177,11 +177,13 @@ class NLPDatasetParser(Dataset):
         premises_batch = [sample["premises"] for sample in batch]
         padded_premise = pad_sequence(premises_batch, batch_first=True)
 
-        # For hypothesis batch to be the same length as the premises
-        # append the last element from padded_premise and then remove it
-        # from the padded_hypotheses before feeding it to the model
+        # Hypotheses list of tensors has to be of the same size as
+        # premises for the model to function properly
         hypotheses_batch = [sample["hypotheses"] for sample in batch]
+        # For that to happen -hypothesis batch to be the same length
+        # as the premises- we had to append the last element from padded_premise
         hypotheses_batch.append(padded_premise[-1])
+        # & then remove it from the padded_hypotheses before feeding it to the model
         padded_hypotheses = pad_sequence(hypotheses_batch, batch_first=True)[:-1]
 
         outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
@@ -192,12 +194,16 @@ class NLPDatasetParser(Dataset):
                 'outputs': outputs_batch}
 
     @staticmethod
-    def decode_predictions(predictions, idx2label):
+    def decode_predictions(predictions, label_itos):
         """
-        Flattens predictions list and get the corresponding label name for each
-        label index
+        Flattens predictions list (if it is a list of lists)
+        and get the corresponding label name for each label index (label_stoi)
         """
-        return [idx2label.get(label) for tag in predictions for label in tag]
+        if any(isinstance(el, list) for el in predictions):
+            return [label_itos.get(label) for tag in predictions for label in tag]
+        else:
+            predictions_ = [_e for e in predictions for _e in e]
+            return [label_itos.get(label) for tag in predictions_ for label in tag]
 
 
 if __name__ == "__main__":

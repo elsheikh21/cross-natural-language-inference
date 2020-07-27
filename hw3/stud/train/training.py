@@ -46,7 +46,7 @@ class Trainer:
             epoch_loss = 0.0
             self.model.train()
             for _, sample in tqdm(enumerate(train_dataset),
-                                  desc=f'Epoch {epoch}/{self._epochs}',
+                                  desc=f'Epoch {epoch}/{self._epochs - 1}',
                                   leave=False, total=len(train_dataset)):
                 # languages_seq = sample["languages"].to(self.device)
                 premises_seq = sample["premises"].to(self.device)

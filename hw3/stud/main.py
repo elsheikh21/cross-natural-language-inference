@@ -3,19 +3,19 @@ import os
 
 import nlp
 import torch
+from data_loader import NLPDatasetParser, read_mnli, read_xnli
+from evaluater import compute_metrics
+from models import BaselineModel, HyperParameters
 from torch.nn import CrossEntropyLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-
-from data_loader import NLPDatasetParser, read_mnli, read_xnli
-from models import BaselineModel, HyperParameters
 from train import Trainer, WriterTensorboardX
 from utils import configure_seed_logging
-from evaluater import compute_metrics
-
 
 if __name__ == "__main__":
+    to_train = False
+
     configure_seed_logging()
     data = read_mnli(nlp.load_dataset('multi_nli')['train'])
     languages, premises, hypotheses, labels = data
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     print(f"Dev data_x length: {len(dev_premises)} sentences")
     print(f"Vocab size: {len(word2idx)}")
     print(f"Labels vocab size: {len(label2idx)}")
-    print("===============================================")
+    print("===============================================\n")
 
     # Set Hyper-parameters
     pretrained_embeddings_ = None
@@ -67,10 +67,16 @@ if __name__ == "__main__":
                       _device=device_)
 
     save_to_ = os.path.join(os.getcwd(), "model", f"{model.name}_model")
-    try:
-        _ = trainer.train(train_dataset_, dev_dataset_, save_to=save_to_)
-    except KeyboardInterrupt:
-        model.save_(save_to_)
+
+    if to_train:
+        try:
+            _ = trainer.train(train_dataset_, dev_dataset_, save_to=save_to_)
+        except KeyboardInterrupt:
+            logging.warning("You halted the training process, saving the model and its weights...")
+            model.save_(save_to_)
+    else:
+        model.load_(f"{save_to_}.pth")
+        logging.info(f"Model loaded from {save_to_}.pth")
 
     test_data = read_xnli(nlp.load_dataset('xnli')['test'])
     test_lang, test_premises, test_hypotheses, test_labels = test_data
@@ -90,6 +96,5 @@ if __name__ == "__main__":
             languages.extend(sample["languages"])
             predicted_labels.extend(batch_predicted_labels)
 
-    predicted_labels_ = [_e for e in predicted_labels for _e in e]
     decoded_predicted_labels = NLPDatasetParser.decode_predictions(predicted_labels, idx2label)
     compute_metrics(languages, decoded_predicted_labels, test_labels)
