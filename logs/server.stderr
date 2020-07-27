@@ -1,0 +1,8 @@
+2020-07-13T12:43:05.672663120Z Traceback (most recent call last):
+2020-07-13T12:43:05.672709374Z   File "hw3/app.py", line 4, in <module>
+2020-07-13T12:43:05.672717354Z     from stud.implementation import build_model
+2020-07-13T12:43:05.672722079Z   File "/home/app/hw3/stud/__init__.py", line 1, in <module>
+2020-07-13T12:43:05.672728924Z     from stud.utils.utilities import (configure_seed_logging, load_pickle, save_pickle, ensure_dir, load_pretrained_embeddings)
+2020-07-13T12:43:05.672733860Z   File "/home/app/hw3/stud/utils/utilities.py", line 7, in <module>
+2020-07-13T12:43:05.672738855Z     import nltk
+2020-07-13T12:43:05.672743172Z ModuleNotFoundError: No module named 'nltk'

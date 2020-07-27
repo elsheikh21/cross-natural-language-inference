@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+model/word_itos.pkl
+model/word_stoi.pkl
+runs/
+
+# PyCharm related
+.idea

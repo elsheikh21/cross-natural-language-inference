@@ -1,0 +1,9 @@
+Flask==1.1.1
+requests==2.23.0
+scikit-learn==0.22.2
+numpy==1.18.2
+tqdm==4.43.0
+torch==1.4.0
+nlp==0.3.0
+six==1.15.0
+tabulate==0.8.7
