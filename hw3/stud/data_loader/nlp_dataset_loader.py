@@ -10,7 +10,6 @@ from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 from utils import load_pickle, save_pickle
 
-
 int2nli_label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
 nli_label2int = {v: k for k, v in int2nli_label.items()}
 nli_labels = list(nli_label2int.keys())
@@ -85,7 +84,7 @@ class NLPDatasetParser(Dataset):
             data [List[str], List[str], List[str], List[str]]: A tuple of 4 lists containing
             language, premise, hypothesis, and labels
         """
-        super().__init__()
+        super(NLPDatasetParser).__init__()
         self.encoded_data = []
         self.device = _device
         self.languages, self.premises, self.hypotheses, self.labels = data
@@ -144,7 +143,7 @@ class NLPDatasetParser(Dataset):
             data_y_stoi.append(torch.LongTensor([label2idx.get(labels)]))
 
         for i in tqdm(range(len(premises_x_stoi)), desc="Encoding dataset",
-                      leave=False, total=len(self.premises) ):
+                      leave=False, total=len(self.premises)):
             self.encoded_data.append({'languages': lang_x[i],
                                       'premises': premises_x_stoi[i],
                                       'hypotheses': hypotheses_x_stoi[i],
@@ -204,6 +203,97 @@ class NLPDatasetParser(Dataset):
         else:
             predictions_ = [_e for e in predictions for _e in e]
             return [label_itos.get(label) for tag in predictions_ for label in tag]
+
+
+class K_NLPDatasetParser(NLPDatasetParser):
+    def __init__(self, _device, data):
+        """
+        Takes NLP Dataset (from Hugging Face NLP package),
+        creates vocabulary, index dataset, pad per batch
+
+        Args:
+            data [List[str], List[str], List[str], List[str]]: A tuple of 4 lists containing
+            language, premise, hypothesis, and labels
+        """
+        super(K_NLPDatasetParser).__init__()
+        self.encoded_data, self.premises_hypotheses = [], []
+        self.languages, self.premises, self.hypotheses, self.labels = data
+        self.process_dataset()
+        self.device = _device
+
+    def create_vocabulary(self, load_from=None):
+        """
+        Creates vocab dictionaries for both data_x which is composed of 2 lists (premises and hypotheses), and
+        creates labels vocab dictionary by invoking `create_labels_vocabulary()`.
+        Auxiliary functionality: saves the vocab dict
+
+        Args: load_from (str, optional): Path to save the vocab dict. Defaults to None.
+        Returns: stoi, itos,labels_stoi, labels_itos: vocabulary dictionaries
+        """
+        if load_from is not None and Path(load_from).is_file():
+            stoi = load_pickle(load_from)
+            itos = {key: val for key, val in enumerate(stoi)}
+            labels_itos = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
+            labels_stoi = {v: k for k, v in labels_itos.items()}
+            return stoi, itos, labels_stoi, labels_itos
+        tokenizer = RegexpTokenizer("[\w']+")
+        words = [word for word in tokenizer.tokenize(" ".join(self.premises_hypotheses))]
+        unigrams = sorted(list(set(words)))
+        stoi = {'<PAD>': 0, '<UNK>': 1, '<SEP>': 2}
+        start_ = 3
+        stoi.update({val: key for key, val in enumerate(unigrams, start=start_)})
+        itos = {key: val for key, val in enumerate(stoi)}
+        if load_from is not None:
+            save_pickle(load_from, stoi)
+            save_pickle(load_from.replace('stoi', 'itos'), itos)
+        labels_itos = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
+        labels_stoi = {v: k for k, v in labels_itos.items()}
+        return stoi, itos, labels_stoi, labels_itos
+
+    def encode_dataset(self, word2idx, label2idx):
+        """ Indexing and encoding the dataset
+        Args: word2idx (dict): Vocab dictionary & label2idx (dict): Labels dictionary
+        """
+        lang_x, premises_hypotheses_x_stoi, data_y_stoi = [], [], []
+        for lang_, premise_hypothesis_, labels in tqdm(zip(self.languages, self.premises_hypotheses, self.labels),
+                                                       leave=False, total=len(self.premises_hypotheses),
+                                                       desc=f'Indexing dataset to {self.device}'):
+            lang_x.append(lang_)
+            premises_hypotheses_x_stoi.append(torch.LongTensor([word2idx.get(word, 1) for word in premise_hypothesis_]))
+            data_y_stoi.append(torch.LongTensor([label2idx.get(labels)]))
+
+        for i in tqdm(range(len(premises_hypotheses_x_stoi)), desc="Encoding dataset",
+                      leave=False, total=len(self.premises_hypotheses)):
+            self.encoded_data.append({'languages': lang_x[i],
+                                      'premises_hypotheses': premises_hypotheses_x_stoi[i],
+                                      'outputs': data_y_stoi[i]})
+
+    def __len__(self):
+        return len(self.premises_hypotheses)
+
+    def get_element(self, idx):
+        return self.languages[idx], self.premises_hypotheses[idx], self.labels[idx]
+
+    @staticmethod
+    def pad_batch(batch):
+        """ Pads sequences per batch with `padding_value=0`
+        Args: batch: List[dict]
+        Returns: dict of models inputs padded as per max len in batch
+        """
+        languages_batch = [sample["languages"] for sample in batch]
+        premises_hypotheses_batch = [sample["premises_hypotheses"] for sample in batch]
+        padded_premises_hypotheses = pad_sequence(premises_hypotheses_batch, batch_first=True)
+        outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+
+        return {'languages': languages_batch,
+                'premises_hypotheses': padded_premises_hypotheses,
+                'outputs': outputs_batch}
+
+    def process_dataset(self):
+        for premises_, hypotheses_ in tqdm(zip(self.premises, self.hypotheses), leave=False,
+                                           desc='Processing Dataset', total=len(self.premises)):
+            self.premises_hypotheses.append(f"{premises_} <SEP> {hypotheses_}")
+        del self.premises, self.hypotheses
 
 
 if __name__ == "__main__":

@@ -3,12 +3,14 @@ import os
 
 import torch
 from tqdm.auto import tqdm
+
+
 # from training.earlystopping import EarlyStopping
 
 
 class Trainer:
     def __init__(self, model, loss_function, optimizer,
-                 epochs, verbose, writer, _device):
+                 epochs, verbose, writer, _device, is_k_format):
         """
         Trainer object requires model, criterion (loss function), optimizer
         verbose level and number of epochs
@@ -20,6 +22,7 @@ class Trainer:
         self._epochs = epochs + 1
         self.writer = writer
         self.device = _device
+        self.k_format = is_k_format
 
     def train(self, train_dataset, valid_dataset, save_to=None):
         """
@@ -48,14 +51,16 @@ class Trainer:
             for _, sample in tqdm(enumerate(train_dataset),
                                   desc=f'Epoch {epoch}/{self._epochs - 1}',
                                   leave=False, total=len(train_dataset)):
-                # languages_seq = sample["languages"].to(self.device)
-                premises_seq = sample["premises"].to(self.device)
-                hypotheses_seq = sample["hypotheses"].to(self.device)
+                if self.k_format:
+                    seq = sample["premises_hypotheses"].to(self.device)
+                else:
+                    premises_seq = sample["premises"].to(self.device)
+                    hypotheses_seq = sample["hypotheses"].to(self.device)
                 labels = sample["outputs"].to(self.device)
                 labels_ = labels.view(-1)
 
                 self.optimizer.zero_grad()
-                predictions = self.model(premises_seq, hypotheses_seq)
+                predictions = self.model(premises_seq, hypotheses_seq) if not self.k_format else self.model(seq)
                 sample_loss = self.loss_function(predictions, labels_)
                 sample_loss.backward()
 
@@ -107,15 +112,16 @@ class Trainer:
         with torch.no_grad():
             for sample in tqdm(valid_dataset, desc='Evaluating',
                                leave=False, total=len(valid_dataset)):
-                premises_seq = sample["premises"].to(self.device)
-                hypotheses_seq = sample["hypotheses"].to(self.device)
+                if self.k_format:
+                    seq = sample["premises_hypotheses"].to(self.device)
+                else:
+                    premises_seq = sample["premises"].to(self.device)
+                    hypotheses_seq = sample["hypotheses"].to(self.device)
                 labels = sample["outputs"].to(self.device)
 
-                predictions = self.model(premises_seq, hypotheses_seq)
+                predictions = self.model(premises_seq, hypotheses_seq) if not self.k_format else self.model(seq)
                 labels = labels.view(-1)
-                # _, argmax = torch.max(predictions, 1)
-                # acc = (labels == argmax.squeeze()).float().mean()
 
                 sample_loss = self.loss_function(predictions, labels)
                 valid_loss += sample_loss.tolist()
-        return valid_loss / len(valid_dataset)  # , acc / len(valid_dataset)
+        return valid_loss / len(valid_dataset)

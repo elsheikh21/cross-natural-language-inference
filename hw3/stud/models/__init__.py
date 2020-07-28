@@ -1,2 +1,2 @@
 from models.hyperparams import HyperParameters
-from models.model_architectures import BaselineModel
+from models.model_architectures import BaselineModel, K_Model
