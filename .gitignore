@@ -132,4 +132,4 @@ model/word_stoi.pkl
 runs/
 
 # PyCharm related
-.idea
+.idea/
