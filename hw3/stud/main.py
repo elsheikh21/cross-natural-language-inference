@@ -5,17 +5,18 @@ import nlp
 import torch
 from data_loader import (NLPDatasetParser, K_NLPDatasetParser, read_mnli, read_xnli)
 from evaluater import compute_metrics
-from models import BaselineModel, K_Model, HyperParameters
+from models import BaselineModel, K_Model, BERT_Model, HyperParameters
 from torch.nn import CrossEntropyLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from train import Trainer, WriterTensorboardX
+from train import Trainer, BERT_Trainer, WriterTensorboardX
 from utils import configure_seed_logging
 
+
 if __name__ == "__main__":
-    to_train = False
-    k_format = True
+    # TODO: TEST DOCKER PIPELINE IMPLEMENTATION
+    to_train, k_format, is_bert = True, True, True
 
     configure_seed_logging()
     data = read_mnli(nlp.load_dataset('multi_nli')['train'])
@@ -28,17 +29,28 @@ if __name__ == "__main__":
     test_lang, test_premises, test_hypotheses, test_labels = test_data
 
     device_ = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    save_path = os.path.join(os.getcwd(), "model", "word_stoii.pkl")
+    save_path = os.path.join(os.getcwd(), "model", "word_stoi.pkl")
 
-    train_dataset = K_NLPDatasetParser(device_, data) if k_format else NLPDatasetParser(device_, data)
+    train_dataset = K_NLPDatasetParser(device_, data, is_bert) if k_format else NLPDatasetParser(device_, data, is_bert)
     word2idx, idx2word, label2idx, idx2label = train_dataset.create_vocabulary(save_path)
     train_dataset.encode_dataset(word2idx, label2idx)
+    logging.info("Parsed and indexed training dataset")
 
-    dev_dataset = K_NLPDatasetParser(device_, dev_data) if k_format else NLPDatasetParser(device_, dev_data)
+    dev_dataset = K_NLPDatasetParser(device_,
+                                     dev_data,
+                                     is_bert) if k_format else NLPDatasetParser(device_,
+                                                                                dev_data,
+                                                                                is_bert)
     dev_dataset.encode_dataset(word2idx, label2idx)
+    logging.info("Parsed and indexed validation dataset")
 
-    test_dataset = K_NLPDatasetParser(device_, test_data) if k_format else NLPDatasetParser(device_, test_data)
+    test_dataset = K_NLPDatasetParser(device_,
+                                      test_data,
+                                      is_bert) if k_format else NLPDatasetParser(device_,
+                                                                                 test_data,
+                                                                                 is_bert)
     test_dataset.encode_dataset(word2idx, label2idx)
+    logging.info("Parsed and indexed testing dataset")
 
     print("\n===============================================")
     print(f"train_x length: {len(premises)} sentences")
@@ -50,9 +62,9 @@ if __name__ == "__main__":
 
     # Set Hyper-parameters
     pretrained_embeddings_ = None
-    batch_size = 32
+    batch_size = 16
 
-    name_ = 'K_BiLSTM_Model'
+    name_ = 'K_BiLSTM_Model_Multilingual'
     hp = HyperParameters(name_, word2idx, label2idx, pretrained_embeddings_, batch_size)
     hp.print_info()
 
@@ -75,16 +87,25 @@ if __name__ == "__main__":
                                    collate_fn=NLPDatasetParser.pad_batch)
 
     # Create and train model
-    model = K_Model(hp).to(device_) if k_format else BaselineModel(hp).to(device_)
+    if not is_bert:
+        model = K_Model(hp).to(device_) if k_format else BaselineModel(hp).to(device_)
+    else:
+        model = BERT_Model(hp).to(device_)
     model.print_summary()
 
     log_path = os.path.join(os.getcwd(), "runs", hp.model_name)
     writer_ = WriterTensorboardX(log_path, logger=logging, enable=True)
 
-    trainer = Trainer(model=model, writer=writer_, verbose=True,
-                      loss_function=CrossEntropyLoss(ignore_index=0),
-                      optimizer=Adam(model.parameters()), epochs=1,
-                      _device=device_, is_k_format=k_format)
+    if not is_bert:
+        trainer = Trainer(model=model, writer=writer_, verbose=True,
+                          loss_function=CrossEntropyLoss(ignore_index=0),
+                          optimizer=Adam(model.parameters()), epochs=1,
+                          _device=device_, is_k_format=k_format)
+    else:
+        trainer = BERT_Trainer(model=model, writer=writer_, epochs=4,
+                               _device=device_, verbose=True,
+                               loss_function=CrossEntropyLoss(ignore_index=0),
+                               optimizer=Adam(model.parameters(), lr=5e-5))
 
     save_to_ = os.path.join(os.getcwd(), "model", f"{model.name}_model")
     # Either to train model from scratch or load a pretrained model

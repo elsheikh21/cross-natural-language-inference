@@ -7,3 +7,4 @@ torch==1.4.0
 nlp==0.3.0
 six==1.15.0
 tabulate==0.8.7
+transformers==3.0.2

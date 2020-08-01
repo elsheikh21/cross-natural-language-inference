@@ -8,6 +8,7 @@ from nltk.tokenize import RegexpTokenizer
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
+from transformers import AutoTokenizer
 from utils import load_pickle, save_pickle
 
 int2nli_label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
@@ -75,7 +76,7 @@ def read_train():
 
 
 class NLPDatasetParser(Dataset):
-    def __init__(self, _device, data):
+    def __init__(self, _device, data, is_bert):
         """
         Takes NLP Dataset (from Hugging Face NLP package),
         creates vocabulary, index dataset, pad per batch
@@ -88,6 +89,7 @@ class NLPDatasetParser(Dataset):
         self.encoded_data = []
         self.device = _device
         self.languages, self.premises, self.hypotheses, self.labels = data
+        self.use_bert = is_bert
 
     def create_vocabulary(self, load_from=None):
         """
@@ -108,7 +110,7 @@ class NLPDatasetParser(Dataset):
             labels_itos = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
             labels_stoi = {v: k for k, v in labels_itos.items()}
             return stoi, itos, labels_stoi, labels_itos
-        tokenizer = RegexpTokenizer("[\w']+")
+        tokenizer = RegexpTokenizer("[\w]+")
         premises_words = [word for word in tokenizer.tokenize(" ".join(self.premises))]
         hypotheses_words = [word for word in tokenizer.tokenize(" ".join(self.hypotheses))]
         premises_words.extend(hypotheses_words)
@@ -132,22 +134,35 @@ class NLPDatasetParser(Dataset):
             word2idx (dict): Vocab dictionary
             label2idx (dict): Labels dictionary
         """
+        model_name = "bert-base-multilingual-cased"
+        bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
         lang_x, premises_x_stoi, hypotheses_x_stoi, data_y_stoi = [], [], [], []
         for lang_, premise_, hypothesis_, labels in tqdm(
                 zip(self.languages, self.premises, self.hypotheses, self.labels),
                 leave=False, total=len(self.premises),
                 desc=f'Indexing dataset to {self.device}'):
             lang_x.append(lang_)
-            premises_x_stoi.append(torch.LongTensor([word2idx.get(word, 1) for word in premise_]))
-            hypotheses_x_stoi.append(torch.LongTensor([word2idx.get(word, 1) for word in hypothesis_]))
+            if self.use_bert:
+                input_ids = bert_tokenizer.encode(premise_, hypothesis_, return_tensors='pt')
+                premises_x_stoi.append(torch.squeeze(input_ids))
+            else:
+                premises_x_stoi.append(torch.LongTensor([word2idx.get(word, 1) for word in premise_]))
+                hypotheses_x_stoi.append(torch.LongTensor([word2idx.get(word, 1) for word in hypothesis_]))
             data_y_stoi.append(torch.LongTensor([label2idx.get(labels)]))
 
-        for i in tqdm(range(len(premises_x_stoi)), desc="Encoding dataset",
-                      leave=False, total=len(self.premises)):
-            self.encoded_data.append({'languages': lang_x[i],
-                                      'premises': premises_x_stoi[i],
-                                      'hypotheses': hypotheses_x_stoi[i],
-                                      'outputs': data_y_stoi[i]})
+        if not self.use_bert:
+            for i in tqdm(range(len(premises_x_stoi)), desc="Encoding dataset",
+                          leave=False, total=len(self.premises)):
+                self.encoded_data.append({'languages': lang_x[i],
+                                          'premises': premises_x_stoi[i],
+                                          'hypotheses': hypotheses_x_stoi[i],
+                                          'outputs': data_y_stoi[i]})
+        else:
+            for i in tqdm(range(len(premises_x_stoi)), desc="Encoding dataset using BART tokenizer",
+                          leave=False, total=len(self.premises)):
+                self.encoded_data.append({'languages': lang_x[i],
+                                          'premises_hypotheses': premises_x_stoi[i],
+                                          'outputs': data_y_stoi[i]})
 
     def __len__(self):
         return len(self.premises)
@@ -172,25 +187,41 @@ class NLPDatasetParser(Dataset):
         Returns:
             dict of models inputs padded as per max len in batch
         """
-        languages_batch = [sample["languages"] for sample in batch]
-        premises_batch = [sample["premises"] for sample in batch]
-        padded_premise = pad_sequence(premises_batch, batch_first=True)
+        premises_hypotheses_flag = True
+        try:
+            x = [sample["premises_hypotheses"] for sample in batch]
+        except KeyError:
+            premises_hypotheses_flag = False
 
-        # Hypotheses list of tensors has to be of the same size as
-        # premises for the model to function properly
-        hypotheses_batch = [sample["hypotheses"] for sample in batch]
-        # For that to happen -hypothesis batch to be the same length
-        # as the premises- we had to append the last element from padded_premise
-        hypotheses_batch.append(padded_premise[-1])
-        # & then remove it from the padded_hypotheses before feeding it to the model
-        padded_hypotheses = pad_sequence(hypotheses_batch, batch_first=True)[:-1]
+        if not premises_hypotheses_flag:
+            languages_batch = [sample["languages"] for sample in batch]
+            premises_batch = [sample["premises"] for sample in batch]
+            padded_premise = pad_sequence(premises_batch, batch_first=True)
 
-        outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+            # Hypotheses list of tensors has to be of the same size as
+            # premises for the model to function properly
+            hypotheses_batch = [sample["hypotheses"] for sample in batch]
+            # For that to happen -hypothesis batch to be the same length
+            # as the premises- we had to append the last element from padded_premise
+            hypotheses_batch.append(padded_premise[-1])
+            # & then remove it from the padded_hypotheses before feeding it to the model
+            padded_hypotheses = pad_sequence(hypotheses_batch, batch_first=True)[:-1]
 
-        return {'languages': languages_batch,
-                'premises': padded_premise,
-                'hypotheses': padded_hypotheses,
-                'outputs': outputs_batch}
+            outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+
+            return {'languages': languages_batch,
+                    'premises': padded_premise,
+                    'hypotheses': padded_hypotheses,
+                    'outputs': outputs_batch}
+        else:
+            languages_batch = [sample["languages"] for sample in batch]
+            premises_hypotheses_batch = [sample["premises_hypotheses"] for sample in batch]
+            padded_premises_hypotheses = pad_sequence(premises_hypotheses_batch, batch_first=True)
+            outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+
+            return {'languages': languages_batch,
+                    'premises_hypotheses': padded_premises_hypotheses,
+                    'outputs': outputs_batch}
 
     @staticmethod
     def decode_predictions(predictions, label_itos):
@@ -206,7 +237,7 @@ class NLPDatasetParser(Dataset):
 
 
 class K_NLPDatasetParser(NLPDatasetParser):
-    def __init__(self, _device, data):
+    def __init__(self, _device, data, is_bert):
         """
         Takes NLP Dataset (from Hugging Face NLP package),
         creates vocabulary, index dataset, pad per batch
@@ -218,8 +249,9 @@ class K_NLPDatasetParser(NLPDatasetParser):
         super(K_NLPDatasetParser).__init__()
         self.encoded_data, self.premises_hypotheses = [], []
         self.languages, self.premises, self.hypotheses, self.labels = data
-        self.process_dataset()
         self.device = _device
+        self.use_bert = is_bert
+        self.process_dataset()
 
     def create_vocabulary(self, load_from=None):
         """
@@ -239,7 +271,7 @@ class K_NLPDatasetParser(NLPDatasetParser):
         tokenizer = RegexpTokenizer("[\w']+")
         words = [word for word in tokenizer.tokenize(" ".join(self.premises_hypotheses))]
         unigrams = sorted(list(set(words)))
-        stoi = {'<PAD>': 0, '<UNK>': 1, '<SEP>': 2}
+        stoi = {'<PAD>': 0, '<UNK>': 1, '[SEP]': 2}
         start_ = 3
         stoi.update({val: key for key, val in enumerate(unigrams, start=start_)})
         itos = {key: val for key, val in enumerate(stoi)}
@@ -254,13 +286,32 @@ class K_NLPDatasetParser(NLPDatasetParser):
         """ Indexing and encoding the dataset
         Args: word2idx (dict): Vocab dictionary & label2idx (dict): Labels dictionary
         """
-        lang_x, premises_hypotheses_x_stoi, data_y_stoi = [], [], []
-        for lang_, premise_hypothesis_, labels in tqdm(zip(self.languages, self.premises_hypotheses, self.labels),
-                                                       leave=False, total=len(self.premises_hypotheses),
-                                                       desc=f'Indexing dataset to {self.device}'):
-            lang_x.append(lang_)
-            premises_hypotheses_x_stoi.append(torch.LongTensor([word2idx.get(word, 1) for word in premise_hypothesis_]))
-            data_y_stoi.append(torch.LongTensor([label2idx.get(labels)]))
+        if self.use_bert:
+            model_name = "bert-base-multilingual-cased"
+            bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
+            lang_x, premises_hypotheses_x_stoi, data_y_stoi = [], [], []
+            for lang_, premise_hypothesis_, labels_ in tqdm(zip(self.languages, self.premises_hypotheses, self.labels),
+                                                            leave=False, total=len(self.premises_hypotheses),
+                                                            desc=f'Indexing dataset to {self.device} using BERT tokenizer'):
+                lang_x.append(lang_)
+                encoding = bert_tokenizer.encode_plus(
+                    premise_hypothesis_,
+                    add_special_tokens=True,  # Add '[CLS]' and '[SEP]'
+                    return_token_type_ids=False,
+                    return_attention_mask=False,
+                    return_tensors='pt'  # Return PyTorch tensors
+                )
+                premises_hypotheses_x_stoi.append(torch.squeeze(encoding['input_ids']))
+                data_y_stoi.append(torch.LongTensor([label2idx.get(labels_)]))
+        else:
+            lang_x, premises_hypotheses_x_stoi, data_y_stoi = [], [], []
+            for lang_, premise_hypothesis_, labels in tqdm(zip(self.languages, self.premises_hypotheses, self.labels),
+                                                           leave=False, total=len(self.premises_hypotheses),
+                                                           desc=f'Indexing dataset to {self.device}'):
+                lang_x.append(lang_)
+                premises_hypotheses_x_stoi.append(
+                    torch.LongTensor([word2idx.get(word, 1) for word in premise_hypothesis_]))
+                data_y_stoi.append(torch.LongTensor([label2idx.get(labels)]))
 
         for i in tqdm(range(len(premises_hypotheses_x_stoi)), desc="Encoding dataset",
                       leave=False, total=len(self.premises_hypotheses)):
@@ -292,7 +343,7 @@ class K_NLPDatasetParser(NLPDatasetParser):
     def process_dataset(self):
         for premises_, hypotheses_ in tqdm(zip(self.premises, self.hypotheses), leave=False,
                                            desc='Processing Dataset', total=len(self.premises)):
-            self.premises_hypotheses.append(f"{premises_} <SEP> {hypotheses_}")
+            self.premises_hypotheses.append(f"{premises_} [SEP] {hypotheses_}")
         del self.premises, self.hypotheses
 
 
