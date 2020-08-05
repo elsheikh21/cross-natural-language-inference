@@ -48,9 +48,9 @@ def ensure_dir(path):
 def compute_epoch_time(start_time, end_time):
     """ Calculate epoch time in minutes and seconds"""
     elapsed_time = end_time - start_time
-    elapsed_mins = int(elapsed_time / 60)
-    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
-    return elapsed_mins, elapsed_secs
+    elapsed_minutes = int(elapsed_time / 60)
+    elapsed_secs = int(elapsed_time - (elapsed_minutes * 60))
+    return elapsed_minutes, elapsed_secs
 
 
 def load_pretrained_embeddings(file_name, word2idx, embeddings_size, save_to=None):

@@ -11,6 +11,7 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 from utils import load_pickle, save_pickle
 
+
 int2nli_label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
 nli_label2int = {v: k for k, v in int2nli_label.items()}
 nli_labels = list(nli_label2int.keys())
@@ -55,6 +56,10 @@ def read_xnli(dataset):
 
 
 def read_mnli(dataset):
+    """
+    READ MNLI Dataset returns 4 lists each of them is a list of strings
+    languages, premises, hypotheses, labels
+    """
     int2nli_label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
     languages = []
     premises = []
@@ -72,7 +77,10 @@ def read_mnli(dataset):
 
 
 def read_train():
-    return read_mnli(nlp.load_dataset('multi_nli')['train'])
+    """
+    Read training dataset (MNLI)
+    """
+    return read_mnli(nlp.load_dataset('multi_nli',verbose)['train'])
 
 
 class NLPDatasetParser(Dataset):
@@ -137,10 +145,9 @@ class NLPDatasetParser(Dataset):
         model_name = "bert-base-multilingual-cased"
         bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
         lang_x, premises_x_stoi, hypotheses_x_stoi, data_y_stoi = [], [], [], []
-        for lang_, premise_, hypothesis_, labels in tqdm(
-                zip(self.languages, self.premises, self.hypotheses, self.labels),
-                leave=False, total=len(self.premises),
-                desc=f'Indexing dataset to {self.device}'):
+        for lang_, premise_, hypothesis_, labels in tqdm(zip(self.languages, self.premises, self.hypotheses, self.labels),
+                                                         leave=False, total=len(self.premises),
+                                                         desc=f'Indexing dataset to {self.device}'):
             lang_x.append(lang_)
             if self.use_bert:
                 input_ids = bert_tokenizer.encode(premise_, hypothesis_, return_tensors='pt')
@@ -193,6 +200,7 @@ class NLPDatasetParser(Dataset):
         except KeyError:
             premises_hypotheses_flag = False
 
+
         if not premises_hypotheses_flag:
             languages_batch = [sample["languages"] for sample in batch]
             premises_batch = [sample["premises"] for sample in batch]
@@ -234,6 +242,7 @@ class NLPDatasetParser(Dataset):
         else:
             predictions_ = [_e for e in predictions for _e in e]
             return [label_itos.get(label) for tag in predictions_ for label in tag]
+
 
 
 class K_NLPDatasetParser(NLPDatasetParser):

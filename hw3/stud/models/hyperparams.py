@@ -14,7 +14,7 @@ class HyperParameters:
         self.embeddings = embeddings_
         self.batch_size = batch_size_
 
-    def print_info(self):
+    def _print_info(self):
         """
         prints summary of model's hyperparameters
         """

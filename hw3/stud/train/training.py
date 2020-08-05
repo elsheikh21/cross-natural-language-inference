@@ -1,10 +1,13 @@
+import time
 import logging
 import os
 
 import torch
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm.auto import tqdm
+from utils import compute_epoch_time
 from train.earlystopping import EarlyStopping
+from torch.nn.utils import clip_grad_norm_
 
 
 class Trainer:
@@ -43,7 +46,7 @@ class Trainer:
         train_loss, best_val_loss = 0.0, float(1e4)
         es = EarlyStopping(patience=5)
         lr_scheduler = ReduceLROnPlateau(self.optimizer, patience=5, verbose=True)
-
+        tik = time.time()
         for epoch in range(1, self._epochs):
             epoch_loss = 0.0
             self.model.train()
@@ -64,7 +67,7 @@ class Trainer:
                 sample_loss.backward()
 
                 # Gradient Clipping
-                # clip_grad_norm_(self.model.parameters(), 5.)
+                clip_grad_norm_(self.model.parameters(), 5.)
                 self.optimizer.step()
                 epoch_loss += sample_loss.tolist()
                 # To update tqdm bar with loss and val_loss
@@ -90,7 +93,10 @@ class Trainer:
                 self.model.save_(model_dir)
 
             if self._verbose > 0:
-                print(f'| Epoch: {epoch:02} | loss: {avg_epoch_loss:.4f} | val_loss: {valid_loss:.4f} |')
+                tok = time.time()
+                minutes, seconds = compute_epoch_time(tik, tok)
+                epoch_time = f'{minutes} minutes, {seconds} seconds'
+                print(f'| Epoch: {epoch:02} | loss: {avg_epoch_loss:.4f} | val_loss: {valid_loss:.4f} | time: {epoch_time} |')
 
             if es.step(valid_loss):
                 print(f"Training Stopped early, epoch #: {epoch}")
@@ -161,25 +167,27 @@ class BERT_Trainer:
         train_loss, best_val_loss = 0.0, float(1e4)
         es = EarlyStopping(patience=5)
         lr_scheduler = ReduceLROnPlateau(self.optimizer, patience=5, verbose=True)
-
+        tik = time.time()
         for epoch in range(1, self._epochs):
             epoch_loss = 0.0
             self.model.train()
             for _, sample in tqdm(enumerate(train_dataset),
                                   desc=f'Epoch {epoch}/{self._epochs - 1}',
                                   leave=False, total=len(train_dataset)):
-                sequences_ = sample["premises_hypotheses"].to(self.device)
-                mask = (sequences_ != 0).to(self.device, dtype=torch.uint8)
+                seq = sample["premises_hypotheses"].to(self.device)
+                mask = (seq != 0).to(self.device, dtype=torch.uint8)
+
                 labels = sample["outputs"].to(self.device)
                 labels_ = labels.view(-1)
 
                 self.optimizer.zero_grad()
-                predictions = self.model(sequences_, mask)
+                predictions = self.model(seq, mask)
+
                 sample_loss = self.loss_function(predictions, labels_)
                 sample_loss.backward()
 
                 # Gradient Clipping
-                # clip_grad_norm_(self.model.parameters(), 5.)
+                clip_grad_norm_(self.model.parameters(), 5.)
                 self.optimizer.step()
                 epoch_loss += sample_loss.tolist()
                 # To update tqdm bar with loss and val_loss
@@ -205,7 +213,11 @@ class BERT_Trainer:
                 self.model.save_(model_dir)
 
             if self._verbose > 0:
-                print(f'| Epoch: {epoch:02} | loss: {avg_epoch_loss:.4f} | val_loss: {valid_loss:.4f} |')
+                tok = time.time()
+                minutes, seconds = compute_epoch_time(tik, tok)
+                epoch_time = f'{minutes} minutes, {seconds} seconds'
+                print(
+                    f'| Epoch: {epoch:02} | loss: {avg_epoch_loss:.4f} | val_loss: {valid_loss:.4f} | time: {epoch_time} |')
 
             if es.step(valid_loss):
                 print(f"Training Stopped early, epoch #: {epoch}")
