@@ -1,3 +1,4 @@
+import nlp
 import time
 import logging
 import os
@@ -8,6 +9,8 @@ from tqdm.auto import tqdm
 from utils import compute_epoch_time
 from train.earlystopping import EarlyStopping
 from torch.nn.utils import clip_grad_norm_
+from transformers import get_linear_schedule_with_warmup
+import pkbar
 
 
 class Trainer:
@@ -94,9 +97,9 @@ class Trainer:
 
             if self._verbose > 0:
                 tok = time.time()
-                minutes, seconds = compute_epoch_time(tik, tok)
-                epoch_time = f'{minutes} minutes, {seconds} seconds'
-                print(f'| Epoch: {epoch:02} | loss: {avg_epoch_loss:.4f} | val_loss: {valid_loss:.4f} | time: {epoch_time} |')
+                tiktok = compute_epoch_time(tok - tik)
+                print(
+                    f'| Epoch: {epoch:02} | loss: {avg_epoch_loss:.4f} | val_loss: {valid_loss:.4f} | time: {tiktok} |')
 
             if es.step(valid_loss):
                 print(f"Training Stopped early, epoch #: {epoch}")
@@ -143,7 +146,7 @@ class BERT_Trainer:
         self.loss_function = loss_function
         self.optimizer = optimizer
         self._verbose = verbose
-        self._epochs = epochs + 1
+        self._epochs = epochs
         self.writer = writer
         self.device = _device
 
@@ -164,45 +167,68 @@ class BERT_Trainer:
         Returns:
             float: average training loss
         """
+        metric = nlp.load_metric('xnli', experiment_id=4)
         train_loss, best_val_loss = 0.0, float(1e4)
+        train_acc = 0.0
+        # Total number of training steps is [number of batches] x [number of epochs].
+        # (Note that this is not the same as the number of training samples).
+        total_steps = len(train_dataset) * self._epochs
+
+        # Create the learning rate scheduler.
+        scheduler = get_linear_schedule_with_warmup(self.optimizer,
+                                                    num_warmup_steps=0,  # Default value in run_glue.py
+                                                    num_training_steps=total_steps)
         es = EarlyStopping(patience=5)
-        lr_scheduler = ReduceLROnPlateau(self.optimizer, patience=5, verbose=True)
-        tik = time.time()
-        for epoch in range(1, self._epochs):
-            epoch_loss = 0.0
+        for epoch in range(1, self._epochs + 1):
+            print(f'Epoch {epoch}/{self._epochs}:')
+            kbar = pkbar.Kbar(target=len(train_dataset))
+            tik = time.time()
+            epoch_acc, epoch_loss = 0.0, 0.0
             self.model.train()
-            for _, sample in tqdm(enumerate(train_dataset),
-                                  desc=f'Epoch {epoch}/{self._epochs - 1}',
-                                  leave=False, total=len(train_dataset)):
+            for batch_idx, sample in enumerate(train_dataset):
                 seq = sample["premises_hypotheses"].to(self.device)
                 mask = (seq != 0).to(self.device, dtype=torch.uint8)
-
+                token_types = sample["token_types"].to(self.device)
                 labels = sample["outputs"].to(self.device)
                 labels_ = labels.view(-1)
 
                 self.optimizer.zero_grad()
-                predictions = self.model(seq, mask)
+                logits = self.model(seq, mask, token_types)
+                _, preds = torch.max(logits, dim=-1)
+                acc_ = metric.compute(preds, labels_)['accuracy']
 
-                sample_loss = self.loss_function(predictions, labels_)
+                # Comment it out when BERT is frozen
+                sample_loss = self.loss_function(logits, labels_)
                 sample_loss.backward()
 
                 # Gradient Clipping
-                clip_grad_norm_(self.model.parameters(), 5.)
+                clip_grad_norm_(self.model.parameters(), 1.)
+
                 self.optimizer.step()
                 epoch_loss += sample_loss.tolist()
-                # To update tqdm bar with loss and val_loss
-                # tqdm.set_postfix(Epoch=epoch, Train_Loss=epoch_loss, refresh=True)
-            avg_epoch_loss = epoch_loss / len(train_dataset)
-            train_loss += avg_epoch_loss
+                epoch_acc += acc_.tolist()
 
-            valid_loss = self.evaluate(valid_dataset)
+                if self._verbose > 0:
+                    tok = time.time()
+                    kbar.update(batch_idx, values=[("loss", sample_loss.item()), ("acc", acc_.item())])
+
+            avg_epoch_loss = epoch_loss / len(train_dataset)
+            avg_epoch_acc = epoch_acc / len(train_dataset)
+            train_loss += avg_epoch_loss
+            train_acc += avg_epoch_acc
+
+            valid_loss, val_acc = self.evaluate(valid_dataset)
+            kbar.add(1,
+                     values=[("loss", train_loss), ("acc", train_acc), ("val_loss", valid_loss), ("val_acc", val_acc)])
             if self.writer:
                 self.writer.set_step(epoch, 'train')
                 self.writer.add_scalar('loss', avg_epoch_loss)
                 self.writer.set_step(epoch, 'valid')
                 self.writer.add_scalar('val_loss', valid_loss)
 
-            lr_scheduler.step(valid_loss)
+            # Update the learning rate.
+            # lr_scheduler.step(valid_loss)
+            scheduler.step()
 
             is_best = valid_loss <= best_val_loss
             if is_best:
@@ -211,13 +237,6 @@ class BERT_Trainer:
                 model_dir = os.path.join(os.getcwd(), 'model',
                                          f'{self.model.name}_ckpt_best')
                 self.model.save_(model_dir)
-
-            if self._verbose > 0:
-                tok = time.time()
-                minutes, seconds = compute_epoch_time(tik, tok)
-                epoch_time = f'{minutes} minutes, {seconds} seconds'
-                print(
-                    f'| Epoch: {epoch:02} | loss: {avg_epoch_loss:.4f} | val_loss: {valid_loss:.4f} | time: {epoch_time} |')
 
             if es.step(valid_loss):
                 print(f"Training Stopped early, epoch #: {epoch}")
@@ -233,6 +252,8 @@ class BERT_Trainer:
         """
         Evaluation during training process to fetch val_loss & val_acc
         """
+        metric = nlp.load_metric('xnli', experiment_id=153582)
+        valid_acc = 0.0
         valid_loss = 0.0
         self.model.eval()
         with torch.no_grad():
@@ -244,9 +265,25 @@ class BERT_Trainer:
                 labels = sample["outputs"].to(self.device)
                 labels_ = labels.view(-1)
 
-                self.optimizer.zero_grad()
-                predictions = self.model(seq, mask)
-
-                sample_loss = self.loss_function(predictions, labels_)
+                logits = self.model(seq, mask)
+                _, preds = torch.max(logits, dim=-1)
+                val_acc = metric.compute(preds, labels)['accuracy']
+                sample_loss = self.loss_function(logits, labels_)
                 valid_loss += sample_loss.tolist()
-        return valid_loss / len(valid_dataset)
+                valid_acc += val_acc.tolist()
+        return valid_loss / len(valid_dataset), valid_acc / len(valid_dataset)
+
+    def save_checkpoint(self, filename):
+        state = {"model": self.model.state_dict(),
+                 "optimizer": self.optimizer.state_dict()}
+        torch.save(state, filename)
+
+    def load_checkpoint(self, filename):
+        checkpoint = torch.load(filename)
+        self.model.load_state_dict(checkpoint['state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        # now individually transfer the optimizer parts...
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)

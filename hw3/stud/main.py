@@ -1,68 +1,69 @@
 import logging
 import os
 
-import nlp
 import torch
-from data_loader import (NLPDatasetParser, K_NLPDatasetParser, read_mnli, read_xnli)
+from data_loader import (NLPDatasetParser, K_NLPDatasetParser, read_train, read_dev, read_test)
 from evaluater import compute_metrics
-from models import BaselineModel, K_Model, BERT_Model, HyperParameters
+from models import BaselineModel, K_Model, HyperParameters
 from torch.nn import CrossEntropyLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from train import Trainer, BERT_Trainer, WriterTensorboardX
+from train import Trainer, WriterTensorboardX
+from transformers import AdamW
 from utils import configure_seed_logging
 
 
+def print_summary(summary_data_, verbose=False):
+    premises, dev_premises, test_premises, word2idx, label2idx = summary_data_
+    if verbose:
+        print("\n=============Data Summary======================",
+              f"train_x length: {len(premises)} sentences",
+              f"dev_x length: {len(dev_premises)} sentences",
+              f"test_x length: {len(test_premises)} sentences",
+              f"Vocab size: {len(word2idx)}",
+              f"Labels vocab size: {len(label2idx)}",
+              "===============================================\n", sep="\n")
+
+
 if __name__ == "__main__":
-    # TODO: TEST DOCKER PIPELINE IMPLEMENTATION
     to_train = True
     k_format = True
     is_bert = True
 
-    configure_seed_logging()
-    data = read_mnli(nlp.load_dataset('multi_nli')['train'])
-    languages, premises, hypotheses, labels = data
-
-    dev_data = read_mnli(nlp.load_dataset('multi_nli')['validation_matched'])
-    dev_lang, dev_premises, dev_hypotheses, dev_labels = dev_data
-
-    test_data = read_xnli(nlp.load_dataset('xnli')['test'])
-    test_lang, test_premises, test_hypotheses, test_labels = test_data
-
     device_ = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     save_path = os.path.join(os.getcwd(), "model", "word_stoi.pkl")
+    configure_seed_logging()
 
+    data = read_train()
+    _, premises, _, _ = data
     train_dataset = K_NLPDatasetParser(device_, data, is_bert) if k_format else NLPDatasetParser(device_, data, is_bert)
     word2idx, idx2word, label2idx, idx2label = train_dataset.create_vocabulary(save_path)
     train_dataset.encode_dataset(word2idx, label2idx)
     logging.info("Parsed and indexed training dataset")
 
-    dev_dataset = K_NLPDatasetParser(device_, dev_data, is_bert) if k_format else NLPDatasetParser(device_, dev_data,
-                                                                                                   is_bert)
+    dev_data = read_dev()
+    _, dev_premises, _, _ = dev_data
+    dev_dataset = K_NLPDatasetParser(device_, dev_data, is_bert) if k_format else NLPDatasetParser(device_, dev_data, is_bert)
     dev_dataset.encode_dataset(word2idx, label2idx)
     logging.info("Parsed and indexed validation dataset")
 
-    test_dataset = K_NLPDatasetParser(device_, test_data, is_bert) if k_format else NLPDatasetParser(device_, test_data,
-                                                                                                     is_bert)
+    test_data = read_test()
+    _, test_premises, _, _ = test_data
+    test_dataset = K_NLPDatasetParser(device_, test_data, is_bert) if k_format else NLPDatasetParser(device_, test_data, is_bert)
     test_dataset.encode_dataset(word2idx, label2idx)
     logging.info("Parsed and indexed testing dataset")
 
-    print("\n===============================================")
-    print(f"train_x length: {len(premises)} sentences")
-    print(f"dev_x length: {len(dev_premises)} sentences")
-    print(f"test_x length: {len(test_premises)} sentences")
-    print(f"Vocab size: {len(word2idx)}")
-    print(f"Labels vocab size: {len(label2idx)}")
-    print("===============================================\n")
+    summary_data = premises, dev_premises, test_premises, word2idx, label2idx
+    print_summary(summary_data)
 
-    pretrained_embeddings_ = None
     # Set Hyperparameters
-    batch_size = 32
+    pretrained_embeddings_ = None
+    batch_size = 16
 
-    name_ = 'mBERT'
-    hp = HyperParameters(name_, word2idx, label2idx, pretrained_embeddings_, batch_size)
-    hp._print_info()
+    name_ = 'K_model'
+    hp = HyperParameters(name_, word2idx, train_dataset.label2idx, pretrained_embeddings_, batch_size)
+    # hp._print_info()
 
     # Prepare data loaders
     if k_format:
@@ -89,34 +90,26 @@ if __name__ == "__main__":
                                    collate_fn=NLPDatasetParser.pad_batch)
 
         # Create and train model
-    if not is_bert:
-        model = K_Model(hp).to(device_) if k_format else BaselineModel(hp).to(device_)
-    else:
-        model = BERT_Model(hp).to(device_)
-    model.print_summary()
 
-    # BERT TRAINING CELL
+    model = K_Model(hp).to(device_) if k_format else BaselineModel(hp).to(device_)
+    # model.print_summary()
+
     log_path = os.path.join(os.getcwd(), 'runs', hp.model_name)
     writer_ = WriterTensorboardX(log_path, logger=logging, enable=True)
+    optimizer_ = AdamW(model.parameters(), lr=2e-5) if is_bert else Adam(model.parameters())
+    epochs_ = 1
 
-    # IMPORTANT https://github.com/huggingface/transformers/issues/1328#issuecomment-534956703
-    if is_bert:
-        trainer = BERT_Trainer(model=model, writer=writer_,
-                               epochs=5, _device=device_, verbose=True,
-                               loss_function=CrossEntropyLoss(ignore_index=0),
-                               optimizer=Adam(model.parameters(), lr=5e-5))
-    else:
-        trainer = Trainer(model=model, writer=writer_, verbose=True,
-                          loss_function=CrossEntropyLoss(ignore_index=0),
-                          optimizer=Adam(model.parameters()), epochs=5,
-                          _device=device_, is_k_format=k_format)
+    trainer = Trainer(model=model, writer=writer_, verbose=True,
+                      loss_function=CrossEntropyLoss(),
+                      optimizer=optimizer_, epochs=epochs_,
+                      _device=device_, is_k_format=k_format)
 
-    save_to_ = os.path.join(os.getcwd(), 'model', f"{model.name}_model")
     # Either to train model from scratch or load a pretrained model
+    save_to_ = os.path.join(os.getcwd(), 'model', f"{model.name}_model")
     if to_train:
         try:
             _ = trainer.train(train_dataset_, dev_dataset_, save_to=save_to_)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, RuntimeError):
             logging.warning("You halted the training process, saving the model and its weights...")
             model.save_(save_to_)
     else:
@@ -129,14 +122,12 @@ if __name__ == "__main__":
         for sample in tqdm(test_dataset_, desc='Predicting on Testing dataset',
                            leave=False, total=len(test_dataset_)):
             languages.extend(sample["languages"])
-            if not k_format and not is_bert:
-                premises_seq = sample["premises"].to(device_)
-                hypotheses_seq = sample["hypotheses"].to(device_)
-                batch_predicted_labels = model.predict_sentence_(premises_seq, hypotheses_seq)
-            elif is_bert:
-                seq = sample["premises_hypotheses"].to(device_)
-                mask = (seq != 0).to(device_, dtype=torch.uint8)
-                batch_predicted_labels = model.predict_sentence_(seq, mask)
+            premises_seq = sample["premises"].to(device_)
+            hypotheses_seq = sample["hypotheses"].to(device_)
+            batch_predicted_labels = model.predict_sentence_(premises_seq, hypotheses_seq)
             predicted_labels.extend(batch_predicted_labels)
-    decoded_predicted_labels = [idx2label.get(label) for tag in predicted_labels for label in tag]
-    compute_metrics(languages, decoded_predicted_labels, test_labels)
+
+    decoded_predicted_labels = [train_dataset.idx2label.get(tag_) for tag in predicted_labels for tag_ in tag]
+    # decoded_predicted_labels = K_NLPDatasetParser.decode_predictions(predicted_labels, label2idx)
+    assert len(decoded_predicted_labels) == len(test_dataset.labels)
+    compute_metrics(languages, decoded_predicted_labels, test_dataset.labels)

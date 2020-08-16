@@ -1,1 +1,1 @@
-from data_loader.nlp_dataset_loader import NLPDatasetParser, K_NLPDatasetParser, read_mnli, read_xnli
+from data_loader.nlp_dataset_loader import (NLPDatasetParser, K_NLPDatasetParser, BERTDatasetParser, read_train, read_dev, read_test)

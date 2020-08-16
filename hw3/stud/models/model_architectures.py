@@ -208,24 +208,28 @@ class K_Model(nn.Module):
         print('==================================================')
 
 
-class BERT_Model(nn.Module):
-    def __init__(self, hparams):
-        super(BERT_Model, self).__init__()
+class BERTModel(nn.Module):
+    def __init__(self, hparams, freeze_bert=False):
+        super(BERTModel, self).__init__()
         self.name = hparams.model_name
         self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model_name = 'bert-base-multilingual-cased'
-        self.bert = BertModel.from_pretrained(model_name)
-        # Freeze BERT Layer
-        for param in self.bert.parameters():
-            param.requires_grad = False
+        self.bert = BertModel.from_pretrained(pretrained_model_name_or_path='bert-base-multilingual-cased')
+
+        if freeze_bert:  # Freeze BERT Layer
+            for param in self.bert.parameters():
+                param.requires_grad = False
 
         self.dropout = nn.Dropout(hparams.dropout)
         classifier_input_dim = self.bert.config.hidden_size
+        # classifier_input_dim = hparams.batch_size
         self.classifier = nn.Linear(classifier_input_dim, hparams.num_classes)
 
-    def forward(self, sequences, attention_mask):
-        bert_hidden_layer, pooled_output = self.bert(input_ids=sequences, attention_mask=attention_mask)
-        o = self.dropout(pooled_output)
+    def forward(self, sequences, attention_mask, tokens_type):
+        bert_hidden_layer, pooled_output = self.bert(input_ids=sequences, attention_mask=attention_mask,
+                                                     token_type_ids=tokens_type)
+        # outputs = self.bert(input_ids=sequences, attention_mask=attention_mask, labels=labels_)
+        sentence_embeddings = torch.mean(bert_hidden_layer, dim=1)
+        o = self.dropout(sentence_embeddings)
         logits = self.classifier(o)
         return logits
 
@@ -245,11 +249,11 @@ class BERT_Model(nn.Module):
         state_dict = torch.load(path) if self.device == 'cuda' else torch.load(path, map_location=self.device)
         self.load_state_dict(state_dict)
 
-    def predict_sentence_(self, seq, mask):
+    def predict_sentence_(self, seq, mask, tokens_type):
         predicted_labels = []
         self.eval()
         with torch.no_grad():
-            predictions = self(seq, mask)
+            predictions = self(seq, mask, tokens_type)
             _, argmax = torch.max(predictions, dim=-1)
             predicted_labels.append(argmax.tolist())
         return predicted_labels

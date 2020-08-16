@@ -18,6 +18,9 @@ nli_labels = list(nli_label2int.keys())
 
 
 def read_test():
+    """
+    Read test dataset (XNLI)
+    """
     return read_xnli(nlp.load_dataset('xnli')['test'])
 
 
@@ -80,7 +83,14 @@ def read_train():
     """
     Read training dataset (MNLI)
     """
-    return read_mnli(nlp.load_dataset('multi_nli',verbose)['train'])
+    return read_mnli(nlp.load_dataset('multi_nli')['train'])
+
+
+def read_dev():
+    """
+    Read validation dataset (MNLI)
+    """
+    return read_mnli(nlp.load_dataset('multi_nli')['validation_matched'])
 
 
 class NLPDatasetParser(Dataset):
@@ -123,7 +133,7 @@ class NLPDatasetParser(Dataset):
         hypotheses_words = [word for word in tokenizer.tokenize(" ".join(self.hypotheses))]
         premises_words.extend(hypotheses_words)
         unigrams = sorted(list(set(premises_words)))
-        stoi = {'<PAD>': 0, '<UNK>': 1}
+        stoi = {'[PAD]': 0, '[UNK]': 1}
         start_ = 2
         stoi.update({val: key for key, val in enumerate(unigrams, start=start_)})
         itos = {key: val for key, val in enumerate(stoi)}
@@ -143,7 +153,7 @@ class NLPDatasetParser(Dataset):
             label2idx (dict): Labels dictionary
         """
         model_name = "bert-base-multilingual-cased"
-        bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
+        bert_tokenizer = AutoTokenizer.from_pretrained(model_name, do_lower_case=False)
         lang_x, premises_x_stoi, hypotheses_x_stoi, data_y_stoi = [], [], [], []
         for lang_, premise_, hypothesis_, labels in tqdm(zip(self.languages, self.premises, self.hypotheses, self.labels),
                                                          leave=False, total=len(self.premises),
@@ -226,6 +236,7 @@ class NLPDatasetParser(Dataset):
             premises_hypotheses_batch = [sample["premises_hypotheses"] for sample in batch]
             padded_premises_hypotheses = pad_sequence(premises_hypotheses_batch, batch_first=True)
             outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+            # outputs_batch = [sample["outputs"] for sample in batch]
 
             return {'languages': languages_batch,
                     'premises_hypotheses': padded_premises_hypotheses,
@@ -244,7 +255,6 @@ class NLPDatasetParser(Dataset):
             return [label_itos.get(label) for tag in predictions_ for label in tag]
 
 
-
 class K_NLPDatasetParser(NLPDatasetParser):
     def __init__(self, _device, data, is_bert):
         """
@@ -260,6 +270,7 @@ class K_NLPDatasetParser(NLPDatasetParser):
         self.languages, self.premises, self.hypotheses, self.labels = data
         self.device = _device
         self.use_bert = is_bert
+        # if not self.use_bert:
         self.process_dataset()
 
     def create_vocabulary(self, load_from=None):
@@ -277,10 +288,10 @@ class K_NLPDatasetParser(NLPDatasetParser):
             labels_itos = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
             labels_stoi = {v: k for k, v in labels_itos.items()}
             return stoi, itos, labels_stoi, labels_itos
-        tokenizer = RegexpTokenizer("[\w']+")
+        tokenizer = RegexpTokenizer("[\w]+")
         words = [word for word in tokenizer.tokenize(" ".join(self.premises_hypotheses))]
         unigrams = sorted(list(set(words)))
-        stoi = {'<PAD>': 0, '<UNK>': 1, '[SEP]': 2}
+        stoi = {'[PAD]': 0, '[UNK]': 1, '[SEP]': 2}
         start_ = 3
         stoi.update({val: key for key, val in enumerate(unigrams, start=start_)})
         itos = {key: val for key, val in enumerate(stoi)}
@@ -295,25 +306,25 @@ class K_NLPDatasetParser(NLPDatasetParser):
         """ Indexing and encoding the dataset
         Args: word2idx (dict): Vocab dictionary & label2idx (dict): Labels dictionary
         """
+        lang_x, premises_hypotheses_x_stoi, attention_masks, data_y_stoi = [], [], [], []
         if self.use_bert:
             model_name = "bert-base-multilingual-cased"
-            bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            lang_x, premises_hypotheses_x_stoi, data_y_stoi = [], [], []
+            bert_tokenizer = AutoTokenizer.from_pretrained(model_name, do_lower_case=False)
             for lang_, premise_hypothesis_, labels_ in tqdm(zip(self.languages, self.premises_hypotheses, self.labels),
                                                             leave=False, total=len(self.premises_hypotheses),
-                                                            desc=f'Indexing dataset to {self.device} using BERT tokenizer'):
+                                                            desc=f'Indexing dataset to {self.device} using mBERT tokenizer'):
                 lang_x.append(lang_)
                 encoding = bert_tokenizer.encode_plus(
                     premise_hypothesis_,
                     add_special_tokens=True,  # Add '[CLS]' and '[SEP]'
                     return_token_type_ids=False,
-                    return_attention_mask=False,
+                    return_attention_mask=True,
                     return_tensors='pt'  # Return PyTorch tensors
                 )
                 premises_hypotheses_x_stoi.append(torch.squeeze(encoding['input_ids']))
+                attention_masks.append(torch.squeeze(encoding['attention_mask']))
                 data_y_stoi.append(torch.LongTensor([label2idx.get(labels_)]))
         else:
-            lang_x, premises_hypotheses_x_stoi, data_y_stoi = [], [], []
             for lang_, premise_hypothesis_, labels in tqdm(zip(self.languages, self.premises_hypotheses, self.labels),
                                                            leave=False, total=len(self.premises_hypotheses),
                                                            desc=f'Indexing dataset to {self.device}'):
@@ -321,12 +332,19 @@ class K_NLPDatasetParser(NLPDatasetParser):
                 premises_hypotheses_x_stoi.append(
                     torch.LongTensor([word2idx.get(word, 1) for word in premise_hypothesis_]))
                 data_y_stoi.append(torch.LongTensor([label2idx.get(labels)]))
-
-        for i in tqdm(range(len(premises_hypotheses_x_stoi)), desc="Encoding dataset",
-                      leave=False, total=len(self.premises_hypotheses)):
-            self.encoded_data.append({'languages': lang_x[i],
-                                      'premises_hypotheses': premises_hypotheses_x_stoi[i],
-                                      'outputs': data_y_stoi[i]})
+        if len(attention_masks) > 0:
+            for i in tqdm(range(len(premises_hypotheses_x_stoi)), desc="Encoding dataset",
+                        leave=False, total=len(self.premises_hypotheses)):
+                self.encoded_data.append({'languages': lang_x[i],
+                                          'premises_hypotheses': premises_hypotheses_x_stoi[i],
+                                          'attention_masks': attention_masks[i],
+                                          'outputs': data_y_stoi[i]})
+        else:
+            for i in tqdm(range(len(premises_hypotheses_x_stoi)), desc="Encoding dataset",
+                        leave=False, total=len(self.premises_hypotheses)):
+                self.encoded_data.append({'languages': lang_x[i],
+                                        'premises_hypotheses': premises_hypotheses_x_stoi[i],
+                                        'outputs': data_y_stoi[i]})
 
     def __len__(self):
         return len(self.premises_hypotheses)
@@ -344,6 +362,7 @@ class K_NLPDatasetParser(NLPDatasetParser):
         premises_hypotheses_batch = [sample["premises_hypotheses"] for sample in batch]
         padded_premises_hypotheses = pad_sequence(premises_hypotheses_batch, batch_first=True)
         outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+        # outputs_batch = [sample["outputs"] for sample in batch]
 
         return {'languages': languages_batch,
                 'premises_hypotheses': padded_premises_hypotheses,
@@ -352,10 +371,92 @@ class K_NLPDatasetParser(NLPDatasetParser):
     def process_dataset(self):
         for premises_, hypotheses_ in tqdm(zip(self.premises, self.hypotheses), leave=False,
                                            desc='Processing Dataset', total=len(self.premises)):
-            self.premises_hypotheses.append(f"{premises_} [SEP] {hypotheses_}")
+            self.premises_hypotheses.append(f"{premises_.strip()} [SEP] {hypotheses_.strip()}")
+        # lengthiest_seq = max(self.premises_hypotheses, key=len)
+        # print(f"MAX LENGTH OF SEQ: {len(lengthiest_seq)} --- {lengthiest_seq}")
         del self.premises, self.hypotheses
 
 
+class BERTDatasetParser(Dataset):
+    def __init__(self, _device, data_):
+        super(BERTDatasetParser).__init__()
+        self.encoded_data = []
+        self.device = _device
+        self.languages, self.premises, self.hypotheses, self.labels = data_
+        self.label2idx = {'entailment': 0, 'neutral': 1, 'contradiction': 2}
+        self.idx2label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
+
+    def __len__(self):
+        return len(self.premises)
+
+    def __getitem__(self, idx):
+        if self.encoded_data is None:
+            raise RuntimeError("Dataset is not indexed yet.\
+                                To fetch raw elements, use get_element(idx)")
+        return self.encoded_data[idx]
+
+    def get_element(self, idx):
+        return self.languages[idx], self.premises[idx], self.hypotheses[idx], self.labels[idx]
+
+    def encode_dataset(self):
+        """ Indexing and encoding the dataset """
+        model_name = "bert-base-multilingual-cased"
+        bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
+        lang_x, data_x_stoi, token_type_ids, data_y_stoi = [], [], [], []
+
+        for lang_, premise_, hypothesis_, labels_ in tqdm(
+                zip(self.languages, self.premises, self.hypotheses, self.labels),
+                leave=False, total=len(self.premises),
+                desc=f'Indexing dataset to "{self.device}" using BERT Tokenizer'):
+            lang_x.append(lang_)
+            encoded_dict = bert_tokenizer.encode_plus(text=premise_,
+                                                      text_pair=hypothesis_,
+                                                      add_special_tokens=True,
+                                                      return_token_type_ids=True,
+                                                      return_attention_mask=False,
+                                                      return_tensors='pt')
+            data_x_stoi.append(torch.squeeze(encoded_dict["input_ids"]))
+            token_type_ids.append(torch.squeeze(encoded_dict["token_type_ids"]))
+            data_y_stoi.append(torch.LongTensor([self.label2idx.get(labels_)]))
+
+        for i in tqdm(range(len(data_x_stoi)), desc="Encoding dataset using BERT tokenizer",
+                      leave=False, total=len(self.premises)):
+            self.encoded_data.append({'languages': lang_x[i],
+                                      'premises_hypotheses': data_x_stoi[i],
+                                      'token_types': token_type_ids[i],
+                                      'outputs': data_y_stoi[i]})
+
+    @staticmethod
+    def pad_batch(batch):
+        """ Pads sequences per batch with `padding_value=0`
+        Args: batch: List[dict]
+        Returns: dict of models inputs padded as per max len in batch
+        """
+        # ('languages', 'premises_hypotheses', 'token_types','outputs')
+        languages_batch = [sample["languages"] for sample in batch]
+        premises_hypotheses_batch = [sample["premises_hypotheses"] for sample in batch]
+        padded_premises_hypotheses = pad_sequence(premises_hypotheses_batch, batch_first=True)
+        # Token types is padded with 1 (unlike others padded with 0), padded with 1's due to
+        # that we are doing pair_sentences encoding so the other sentence is consisting of 1's
+        token_types_batch = [sample["token_types"] for sample in batch]
+        padded_token_types = pad_sequence(token_types_batch, padding_value=1, batch_first=True)
+        outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+
+        return {"languages": languages_batch,
+                "premises_hypotheses": padded_premises_hypotheses,
+                "token_types": padded_token_types,
+                "outputs": outputs_batch}
+
+    def decode_predictions(self, predictions):
+        """
+        Flattens predictions list (if it is a list of lists)
+        and get the corresponding label name for each label index (label_stoi)
+        """
+        if any(isinstance(el, list) for el in predictions):
+            return [self.idx2label.get(label) for tag in predictions for label in tag]
+        else:
+            predictions_ = [_e for e in predictions for _e in e]
+            return [self.idx2label.get(label) for tag in predictions_ for label in tag]
 if __name__ == "__main__":
     nltk.download('punkt', quiet=True)
     data = read_mnli(nlp.load_dataset('multi_nli')['train'])
@@ -364,12 +465,16 @@ if __name__ == "__main__":
 
     device_ = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     save_path = os.path.join(os.getcwd(), "word_stoi.pkl")
-    train_dataset = NLPDatasetParser(device_, data)
-    word2idx, idx2word, label2idx, idx2label = train_dataset.create_vocabulary(save_path)
 
-    print(f"Train data_x length: {len(premises)} sentences")
-    print(f"Dev data_x length: {len(dev_premises)} sentences")
-    print(f"Vocab size: {len(word2idx)}")
-    print(f"Labels vocab size: {len(label2idx)}")
+    train_dataset = BERTDatasetParser(device_, data)
+    train_dataset.encode_dataset()
 
-    train_dataset.encode_dataset(word2idx, label2idx)
+    # train_dataset = NLPDatasetParser(device_, data)
+    # word2idx, idx2word, label2idx, idx2label = train_dataset.create_vocabulary(save_path)
+    #
+    # print(f"Train data_x length: {len(premises)} sentences")
+    # print(f"Dev data_x length: {len(dev_premises)} sentences")
+    # print(f"Vocab size: {len(word2idx)}")
+    # print(f"Labels vocab size: {len(label2idx)}")
+    #
+    # train_dataset.encode_dataset(word2idx, label2idx)
