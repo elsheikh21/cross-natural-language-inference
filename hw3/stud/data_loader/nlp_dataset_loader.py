@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, XLMTokenizer
 from utils import load_pickle, save_pickle
+import pkbar
 
 
 int2nli_label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
@@ -537,6 +538,113 @@ class XLMDatasetParser(Dataset):
         else:
             predictions_ = [_e for e in predictions for _e in e]
             return [self.idx2label.get(label) for tag in predictions_ for label in tag]
+
+
+class XLMRTrainer:
+    def __init__(self, model, loss_function, optimizer,
+                 epochs, verbose, writer, _device):
+        self.model = model
+        self.loss_function = loss_function
+        self.optimizer = optimizer
+        self._verbose = verbose
+        self._epochs = epochs
+        self.writer = writer
+        self.device = _device
+
+    def train(self, train_dataset, valid_dataset, save_to=None):
+        metric = nlp.load_metric('xnli')
+        train_loss, train_acc, best_val_loss = 0.0, 0.0, float(1e4)
+
+        for epoch in range(1, self._epochs + 1):
+            print(f'Epoch {epoch}/{self._epochs}:')
+            kbar = pkbar.Kbar(target=len(train_dataset))
+
+            epoch_acc, epoch_loss = 0.0, 0.0
+            self.model.train()
+            for batch_idx, sample in enumerate(train_dataset):
+                seq = sample["premises_hypotheses"].to(self.device)
+                mask = sample["attention_mask"].to(self.device)
+                token_types = sample["token_types"].to(self.device)
+                labels = sample["outputs"].to(self.device)
+                labels_ = labels.view(-1)
+
+                self.optimizer.zero_grad()
+                logits = self.model(seq, mask, token_types)
+                _, preds = torch.max(logits, dim=-1)
+                acc_ = metric.compute(preds, labels_)['accuracy']
+
+                sample_loss = self.loss_function(logits, labels_)
+                sample_loss.backward()
+                # clip_grad_norm_(self.model.parameters(), 1.)  # Gradient Clipping
+                self.optimizer.step()
+                epoch_loss += sample_loss.tolist()
+                epoch_acc += acc_.tolist()
+
+                if self._verbose > 0:
+                    kbar.update(batch_idx, values=[("loss", sample_loss.item()), ("acc", acc_.item())])
+
+            avg_epoch_loss = epoch_loss / len(train_dataset)
+            avg_epoch_acc = epoch_acc / len(train_dataset)
+            train_loss += avg_epoch_loss
+            train_acc += avg_epoch_acc
+
+            valid_loss, val_acc = self.evaluate(valid_dataset)
+            kbar.add(1,
+                     values=[("loss", train_loss), ("acc", train_acc), ("val_loss", valid_loss), ("val_acc", val_acc)])
+            if self.writer:
+                self.writer.set_step(epoch, 'train')
+                self.writer.add_scalar('loss', avg_epoch_loss)
+                self.writer.set_step(epoch, 'valid')
+                self.writer.add_scalar('val_loss', valid_loss)
+
+            is_best = valid_loss <= best_val_loss
+            if is_best:
+                logging.info("Model Checkpoint saved")
+                best_val_loss = valid_loss
+                model_dir = os.path.join(os.getcwd(), 'model',
+                                         f'{self.model.name}_ckpt_best')
+                self.model.save_(model_dir)
+        avg_epoch_loss = train_loss / self._epochs
+        avg_epoch_acc = train_acc / self._epochs
+
+        if save_to is not None:
+            self.model.save_(save_to)
+        return avg_epoch_loss, avg_epoch_acc
+
+    def evaluate(self, valid_dataset):
+        metric = nlp.load_metric('xnli')
+        valid_acc, valid_loss = 0.0, 0.0
+        self.model.eval()
+        with torch.no_grad():
+            for sample in tqdm(valid_dataset, desc='Evaluating',
+                               leave=False, total=len(valid_dataset)):
+                seq = sample["premises_hypotheses"].to(self.device)
+                mask = sample["attention_mask"].to(self.device)
+                token_types = sample["token_types"].to(self.device)
+                labels = sample["outputs"].to(self.device)
+                labels_ = labels.view(-1)
+                logits = self.model(seq, mask, token_types)
+                _, preds = torch.max(logits, dim=-1)
+                val_acc = metric.compute(preds, labels)['accuracy']
+                sample_loss = self.loss_function(logits, labels_)
+                valid_loss += sample_loss.tolist()
+                valid_acc += val_acc.tolist()
+        return valid_loss / len(valid_dataset), valid_acc / len(valid_dataset)
+
+    def save_checkpoint(self, filename):
+        state = {"model": self.model.state_dict(),
+                 "optimizer": self.optimizer.state_dict()}
+        torch.save(state, filename)
+
+    def load_checkpoint(self, filename):
+        checkpoint = torch.load(filename)
+        self.model.load_state_dict(checkpoint['state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        # now individually transfer the optimizer parts...
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(self.device)
 
 
 if __name__ == "__main__":
