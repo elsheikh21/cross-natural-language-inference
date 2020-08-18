@@ -8,7 +8,7 @@ from nltk.tokenize import RegexpTokenizer
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, XLMTokenizer
 from utils import load_pickle, save_pickle
 
 
@@ -402,29 +402,21 @@ class BERTDatasetParser(Dataset):
         """ Indexing and encoding the dataset """
         model_name = "bert-base-multilingual-cased"
         bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
-        lang_x, data_x_stoi, token_type_ids, data_y_stoi = [], [], [], []
 
         for lang_, premise_, hypothesis_, labels_ in tqdm(
                 zip(self.languages, self.premises, self.hypotheses, self.labels),
                 leave=False, total=len(self.premises),
                 desc=f'Indexing dataset to "{self.device}" using BERT Tokenizer'):
-            lang_x.append(lang_)
             encoded_dict = bert_tokenizer.encode_plus(text=premise_,
                                                       text_pair=hypothesis_,
                                                       add_special_tokens=True,
                                                       return_token_type_ids=True,
                                                       return_attention_mask=False,
                                                       return_tensors='pt')
-            data_x_stoi.append(torch.squeeze(encoded_dict["input_ids"]))
-            token_type_ids.append(torch.squeeze(encoded_dict["token_type_ids"]))
-            data_y_stoi.append(torch.LongTensor([self.label2idx.get(labels_)]))
-
-        for i in tqdm(range(len(data_x_stoi)), desc="Encoding dataset using BERT tokenizer",
-                      leave=False, total=len(self.premises)):
-            self.encoded_data.append({'languages': lang_x[i],
-                                      'premises_hypotheses': data_x_stoi[i],
-                                      'token_types': token_type_ids[i],
-                                      'outputs': data_y_stoi[i]})
+            self.encoded_data.append({'languages': lang_,
+                                      'premises_hypotheses': torch.squeeze(encoded_dict["input_ids"]),
+                                      'token_types': torch.squeeze(encoded_dict["token_type_ids"]),
+                                      'outputs': torch.LongTensor([self.label2idx.get(labels_)])})
 
     @staticmethod
     def pad_batch(batch):
@@ -457,6 +449,96 @@ class BERTDatasetParser(Dataset):
         else:
             predictions_ = [_e for e in predictions for _e in e]
             return [self.idx2label.get(label) for tag in predictions_ for label in tag]
+
+
+class XLMDatasetParser(Dataset):
+    """ PreTrainedModel (XLM) DatasetParser """
+
+    def __init__(self, _device, data_, model_="xlm-mlm-tlm-xnli15-1024"):
+        super(XLMDatasetParser).__init__()
+        self.encoded_data = []
+        self.device = _device
+        self.languages, self.premises, self.hypotheses, self.labels = data_
+        self.model_name = model_
+        self.label2idx = {'entailment': 0, 'neutral': 1, 'contradiction': 2}
+        self.idx2label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
+
+    def __len__(self):
+        return len(self.premises)
+
+    def __getitem__(self, idx):
+        if self.encoded_data is None:
+            raise RuntimeError("Dataset is not indexed yet.\
+                                To fetch raw elements, use get_element(idx)")
+        return self.encoded_data[idx]
+
+    def get_element(self, idx):
+        return self.languages[idx], self.premises[idx], self.hypotheses[idx], self.labels[idx]
+
+    def encode_dataset(self):
+        """ Indexing and encoding the dataset """
+        tokenizer = XLMTokenizer.from_pretrained(self.model_name, do_lower_case=True)
+
+        for lang_, premise_, hypothesis_, labels_ in tqdm(
+                zip(self.languages, self.premises, self.hypotheses, self.labels),
+                leave=False, total=len(self.premises),
+                desc=f'Encoding dataset'):
+            encoded_dict = tokenizer.encode_plus(text=premise_,
+                                                 text_pair=hypothesis_,
+                                                 add_special_tokens=True,
+                                                 return_token_type_ids=True,
+                                                 return_attention_mask=True,
+                                                 max_length = 128,
+                                                 truncation=True,
+                                                 pad_to_max_length=True,
+                                                 return_tensors='pt')
+            self.encoded_data.append({'languages': torch.LongTensor([tokenizer.lang2id.get(lang_) for _ in range(len(encoded_dict["input_ids"][0]))]),
+                                      'premises_hypotheses': torch.squeeze(encoded_dict["input_ids"]),
+                                      'attention_mask': torch.squeeze(encoded_dict["attention_mask"]),
+                                      'token_types': torch.squeeze(encoded_dict["token_type_ids"]),
+                                      'outputs': torch.LongTensor([self.label2idx.get(labels_)])})
+
+    @staticmethod
+    def pad_batch(batch):
+        """ Pads sequences per batch with `padding_value=0`
+        Args: batch: List[dict]
+        Returns: dict of models inputs padded as per max len in batch
+        """
+        # ('languages', 'premises_hypotheses', 'token_types','outputs')
+        premises_hypotheses_batch = [sample["premises_hypotheses"] for sample in batch]
+        padded_premises_hypotheses = pad_sequence(premises_hypotheses_batch, padding_value=2, batch_first=True)
+        languages_batch = [sample["languages"] for sample in batch]
+
+        lang_padding_val = int(languages_batch[0][0])
+        padded_languages_batch = pad_sequence(languages_batch, padding_value=lang_padding_val, batch_first=True)
+
+        mask = [sample["attention_mask"] for sample in batch]
+        padded_mask = pad_sequence(mask, padding_value=0, batch_first=True)
+
+        # Token types is padded with 1 (unlike others padded with 0), padded with 1's due to
+        # that we are doing pair_sentences encoding so the other sentence is consisting of 1's
+        token_types_batch = [sample["token_types"] for sample in batch]
+        padded_token_types = pad_sequence(token_types_batch, padding_value=1, batch_first=True)
+        outputs_batch = pad_sequence([sample["outputs"] for sample in batch], batch_first=True)
+
+        return {"languages": padded_languages_batch,
+                "premises_hypotheses": padded_premises_hypotheses,
+                "attention_mask": padded_mask,
+                "token_types": padded_token_types,
+                "outputs": outputs_batch}
+
+    def decode_predictions(self, predictions):
+        """
+        Flattens predictions list (if it is a list of lists)
+        and get the corresponding label name for each label index (label_stoi)
+        """
+        if any(isinstance(el, list) for el in predictions):
+            return [self.idx2label.get(label) for tag in predictions for label in tag]
+        else:
+            predictions_ = [_e for e in predictions for _e in e]
+            return [self.idx2label.get(label) for tag in predictions_ for label in tag]
+
+
 if __name__ == "__main__":
     nltk.download('punkt', quiet=True)
     data = read_mnli(nlp.load_dataset('multi_nli')['train'])

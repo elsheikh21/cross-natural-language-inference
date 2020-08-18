@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn.modules.module import _addindent
-from transformers import BertModel
+from transformers import BertModel, XLMModel
 
 
 class BaselineModel(nn.Module):
@@ -254,6 +254,94 @@ class BERTModel(nn.Module):
         self.eval()
         with torch.no_grad():
             predictions = self(seq, mask, tokens_type)
+            _, argmax = torch.max(predictions, dim=-1)
+            predicted_labels.append(argmax.tolist())
+        return predicted_labels
+
+    def print_summary(self, show_weights=False, show_parameters=False):
+        """
+        Summarizes torch model by showing trainable parameters and weights.
+        """
+        tmpstr = self.__class__.__name__ + ' (\n'
+        for key, module in self._modules.items():
+            # if it contains layers let call it recursively to get params and weights
+            if type(module) in [
+                torch.nn.modules.container.Container,
+                torch.nn.modules.container.Sequential
+            ]:
+                modstr = self.print_summary()
+            else:
+                modstr = module.__repr__()
+            modstr = _addindent(modstr, 2)
+
+            params = sum([np.prod(p.size()) for p in module.parameters()])
+            weights = tuple([tuple(p.size()) for p in module.parameters()])
+
+            tmpstr += '  (' + key + '): ' + modstr
+            if show_weights:
+                tmpstr += ', weights={}'.format(weights)
+            if show_parameters:
+                tmpstr += ', parameters={}'.format(params)
+            tmpstr += '\n'
+
+        tmpstr = tmpstr + ')'
+        print(f'========== {self.name} Model Summary ==========')
+        print(tmpstr)
+        num_params = sum(p.numel()
+                         for p in self.parameters() if p.requires_grad)
+        print(f"Number of parameters: {num_params:,}")
+        print('==================================================')
+
+
+class XLM_Model(nn.Module):
+    def __init__(self, hparams, model_name="xlm-mlm-tlm-xnli15-1024", freeze_model=False):
+        super(XLM_Model, self).__init__()
+        self.name = hparams.model_name
+        self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.pretrained_model = XLMModel.from_pretrained(model_name,
+                                                         output_hidden_states=True,
+                                                         output_attentions=False)
+
+        if freeze_model:  # Freeze model Layer
+            for param in self.pretrained_model.parameters():
+                param.requires_grad = False
+
+        self.dropout = nn.Dropout(hparams.dropout)
+        classifier_input_dim = self.pretrained_model.config.hidden_size
+        self.classifier = nn.Linear(classifier_input_dim, hparams.num_classes)
+
+    def forward(self, languages, sequences, attention_mask, tokens_type):
+        outputs = self.pretrained_model(langs=languages,
+                                        input_ids=sequences,
+                                        attention_mask=attention_mask,
+                                        token_type_ids=tokens_type)
+        last_hidden_state = outputs[0]
+        sentence_embeddings = torch.mean(last_hidden_state, dim=1)
+        o = self.dropout(sentence_embeddings)
+        logits = self.classifier(o)
+        return logits
+
+    def save_(self, dir_path):
+        """
+        Saves model and its state dict into the given dir path
+        Args: dir_path (str)
+        """
+        torch.save(self, f'{dir_path}.pt')
+        torch.save(self.state_dict(), f'{dir_path}.pth')
+
+    def load_(self, path):
+        """
+        Loads the model and its state dictionary
+        Args: path (str): [Model's state dict is located]
+        """
+        state_dict = torch.load(path) if self.device == 'cuda' else torch.load(path, map_location=self.device)
+        self.load_state_dict(state_dict)
+
+    def predict_sentence_(self, languages, seq, mask, tokens_type):
+        predicted_labels = []
+        self.eval()
+        with torch.no_grad():
+            predictions = self(languages, seq, mask, tokens_type)
             _, argmax = torch.max(predictions, dim=-1)
             predicted_labels.append(argmax.tolist())
         return predicted_labels
