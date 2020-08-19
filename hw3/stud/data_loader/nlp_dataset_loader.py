@@ -12,6 +12,18 @@ from transformers import AutoTokenizer, XLMTokenizer
 from utils import load_pickle, save_pickle
 import pkbar
 
+import collections
+import pandas as pd
+from plotly.offline import iplot
+from plotly import tools
+import plotly.graph_objects as go
+import plotly.express as px
+import plotly.offline as py
+import plotly.figure_factory as ff
+import plotly.offline as pyo
+
+import matplotlib.pyplot as plt
+
 
 int2nli_label = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
 nli_label2int = {v: k for k, v in int2nli_label.items()}
@@ -540,7 +552,7 @@ class XLMDatasetParser(Dataset):
             return [self.idx2label.get(label) for tag in predictions_ for label in tag]
 
 
-class XLMRTrainer:
+class XLMRTrainer(Dataset):
     def __init__(self, model, loss_function, optimizer,
                  epochs, verbose, writer, _device):
         self.model = model
@@ -648,16 +660,88 @@ class XLMRTrainer:
 
 
 if __name__ == "__main__":
-    nltk.download('punkt', quiet=True)
-    data = read_mnli(nlp.load_dataset('multi_nli')['train'])
-    languages, premises, hypotheses, labels = data
-    dev_lang, dev_premises, dev_hypotheses, dev_labels = read_mnli(nlp.load_dataset('multi_nli')['validation_matched'])
-
     device_ = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     save_path = os.path.join(os.getcwd(), "word_stoi.pkl")
+    nltk.download('punkt', quiet=True)
+    model_name_ = "xlm-mlm-tlm-xnli15-1024"
 
-    train_dataset = BERTDatasetParser(device_, data)
+    data = read_train()
+    train_dataset = XLMDatasetParser(device_, data, model_name_)
     train_dataset.encode_dataset()
+
+    dev_data = read_dev()
+    dev_dataset = XLMDatasetParser(device_, dev_data, model_name_)
+    dev_dataset.encode_dataset()
+
+    test_data = read_test()
+    test_dataset = XLMDatasetParser(device_, test_data, model_name_)
+    test_dataset.encode_dataset()
+
+    counter = collections.Counter(train_dataset.labels)
+    print(f"Number of classes occurrences (train dataset):\n{counter}\n")
+    train_df = pd.DataFrame(list(zip(train_dataset.languages,
+                                     train_dataset.premises,
+                                     train_dataset.hypotheses,
+                                     train_dataset.labels)),
+                            columns=['Languages', 'Premises',
+                                     'Hypotheses', 'Labels'])
+
+    print(train_df.head())
+
+    dev_counter = collections.Counter(dev_dataset.labels)
+    print(f"Number of classes occurrences (dev dataset):\n{dev_counter}\n")
+
+    dev_df = pd.DataFrame(list(zip(dev_dataset.languages,
+                                   dev_dataset.premises,
+                                   dev_dataset.hypotheses,
+                                   dev_dataset.labels)),
+                          columns=['Languages', 'Premises',
+                                   'Hypotheses', 'Labels'])
+
+    print(dev_df.head())
+
+    test_counter = collections.Counter(test_dataset.labels)
+    print(f"Number of classes occurrences (test dataset):\n{test_counter}\n")
+
+    test_df = pd.DataFrame(list(zip(test_dataset.languages,
+                                    test_dataset.premises,
+                                    test_dataset.hypotheses,
+                                    test_dataset.labels)),
+                           columns=['Languages', 'Premises',
+                                    'Hypotheses', 'Labels'])
+
+    print(test_df.head())
+
+    Accuracy = pd.DataFrame()
+    Accuracy['Type'] = train_df.Labels.value_counts().index
+    Accuracy['Count'] = train_df.Labels.value_counts().values
+    Accuracy['Type'] = Accuracy['Type'].replace(0, 'Entailment')
+    Accuracy['Type'] = Accuracy['Type'].replace(1, 'Neutral')
+    Accuracy['Type'] = Accuracy['Type'].replace(2, 'Contradiction')
+
+    print(Accuracy)
+
+    fig = go.Figure(data=[go.Pie(labels=Accuracy['Type'], values=Accuracy['Count'])])
+    fig.update_layout(title={
+        'text': "Percentage distribution of the 3 classes",
+        'y': 0.9,
+        'x': 0.5,
+        'xanchor': 'center',
+        'yanchor': 'top'})
+    fig.show()
+
+    fig = px.bar(Accuracy, x='Type', y='Count',
+                 hover_data=['Count'], color='Count',
+                 labels={'pop': 'Total Number of game titles'})
+
+    fig.update_layout(title={
+        'text': "Count of each of the target classes",
+        'y': 0.9,
+        'x': 0.5,
+        'xanchor': 'center',
+        'yanchor': 'top'})
+    fig.show()
+    # fig.write_image("Count of each of the target classes (TRAIN).png")
 
     # train_dataset = NLPDatasetParser(device_, data)
     # word2idx, idx2word, label2idx, idx2label = train_dataset.create_vocabulary(save_path)

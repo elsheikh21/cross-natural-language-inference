@@ -653,7 +653,6 @@ if __name__ == "__main__":
         model.save_(save_to_)
         trainer.save_checkpoint(filename=f"{model.name}_ckpt_retrain.pt")
 
-
     """ Predict and compute scores """
 
     predicted_labels = []
