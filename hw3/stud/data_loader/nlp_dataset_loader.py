@@ -598,7 +598,6 @@ class XLMRDatasetParser(Dataset):
         """
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_name, do_lower_case=True)
-
         for lang_, premise_, hypothesis_, labels_ in tqdm(
                 zip(self.languages, self.premises, self.hypotheses, self.labels),
                 leave=False, total=len(self.premises),
@@ -779,8 +778,6 @@ if __name__ == "__main__":
 
     def print_summary(summary_data, verbose=False):
         premises, dev_premises, test_premises, word2idx, label2idx = summary_data
-        # To clear out cell from unwanted downloading and indexing progress bars
-        clear_output()
         if verbose:
             print("\n=============Data Summary======================",
                   f"train_x length: {len(premises)} sentences",

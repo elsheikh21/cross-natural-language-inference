@@ -3,3 +3,12 @@
 # all the code in here will be executed only once (unless you change this file or requirements.txt)
 # NOTE: DO NOT put anything referring to your own files here (no imports from stud), it won't work!
 # NOTE: DO NOT declare anything here that you want to use in your stud folder!
+import nltk
+from transformers import AutoTokenizer, AutoModel
+
+nltk.download('punkt', quiet=True)
+nltk.download('stopwords', quiet=True)
+
+model_name = "xlm-roberta-large"
+tokenizer = AutoTokenizer.from_pretrained(model_name, do_lower_case=True)
+model = AutoModel.from_pretrained(model_name)

@@ -25,6 +25,7 @@ def configure_seed_logging(SEED=1873337):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     nltk.download('punkt', quiet=True)
+    nltk.download('stopwords', quiet=True)
     logging.basicConfig(format="%(levelname)s - %(asctime)s: %(message)s",
                         datefmt='%H:%M:%S', level=logging.WARNING)
 
