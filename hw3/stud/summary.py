@@ -1,45 +1,20 @@
-from nltk.tokenize import RegexpTokenizer
-from wordcloud import WordCloud, STOPWORDS, ImageColorGenerator
-import seaborn as sns
-from IPython.display import clear_output
-import matplotlib.pyplot as plt
-import plotly.offline as pyo
-import plotly.figure_factory as ff
-import plotly.offline as py
+import collections
+import random
+from pprint import pprint
+
+import numpy as np
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly import tools
-from plotly.offline import iplot
-import pandas as pd
-import collections
-import shutil
-import pkbar
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.nn.utils import clip_grad_norm_
-from torch.nn.modules.module import _addindent
-import torch.nn as nn
-from tqdm.autonotebook import tqdm
-from torch.utils.data import DataLoader
-from torch.nn import CrossEntropyLoss
-from torch.optim import Adam
-from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pad_sequence
-from tabulate import tabulate
-import torch
+from wordcloud import WordCloud, STOPWORDS
 import nltk
-import nlp
-import time
-import warnings
-import importlib
-import logging
-from pathlib import Path
-import numpy as np
-import random
-import datetime
-import pickle
-import os
-import json
-from pprint import pprint
+import string
+import matplotlib as mlp
+import matplotlib.pyplot as plt
+from random import random
+import seaborn as sns
+nltk.download('stopwords')
+
 
 counter = collections.Counter(train_dataset.labels)
 print(f"Number of classes occurrences (train dataset):\n{counter}\n")
@@ -305,3 +280,51 @@ plt.imshow(wordcloud, interpolation="bilinear")
 plt.axis("off")
 plt.show()
 plt.savefig("english_word_cloud.png")
+
+
+STOPWORDS = set(stopwords.words('english'))
+PUNCTUATIONS = string.punctuation
+MLP_CNAMES = mlp.colors.cnames
+
+
+def random_color_generator(color_type=None):
+    if color_type is None:
+        colors = sorted(MLP_CNAMES.items(), key=lambda x: random())
+    else:
+        colors = sorted(color_type.items(), key=lambda x: random())
+    return dict(colors)
+
+
+colors = random_color_generator()
+
+
+def show_word_cloud(data, title=None):
+    word_cloud = WordCloud(
+        background_color=list(colors.keys())[1],
+        max_words=100,
+        stopwords=STOPWORDS,
+        max_font_size=40,
+        scale=3,
+        random_state=42).generate(data)
+    fig = plt.figure(figsize=(20, 20))
+    plt.axis('off')
+    if title:
+        fig.suptitle(title, fontsize=20)
+        fig.subplots_adjust(top=2.3)
+
+    plt.imshow(word_cloud)
+    plt.show()
+    fig.savefig(f"{str(title).replace(' ', '_').lower()}.png")
+
+
+# Most Comman words in entailment Prases
+entailment = " ".join(train_df[train_df.Labels == 'entailment']['Premises'])
+show_word_cloud(entailment, 'TOP 100 Entailment Words')
+
+# Most Comman words in Neutral Prases
+neutral = " ".join(train_df[train_df.Labels == 'neutral']['Premises'])
+show_word_cloud(neutral, 'TOP 100 Neutral Words')
+
+# Most Comman words in Contradictory Prases
+contradiction = " ".join(train_df[train_df.Labels == 'contradiction']['Premises'])
+show_word_cloud(contradiction, 'TOP 100 Contradiction Words')

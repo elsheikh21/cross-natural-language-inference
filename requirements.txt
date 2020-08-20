@@ -9,4 +9,8 @@ six==1.15.0
 tabulate==0.8.7
 transformers==3.0.2
 pkbar==0.4
-nltk
+nltk==3.2.5
+plotly==4.4.1
+matplotlib==3.2.2
+seaborn==0.10.1
+wordcloud==1.5.0
