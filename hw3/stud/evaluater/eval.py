@@ -1,5 +1,9 @@
 import nlp
-
+import pandas as pd
+from sklearn.metrics import confusion_matrix
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+import seaborn as sn
 from tabulate import tabulate
 
 
@@ -29,3 +33,18 @@ def compute_metrics(languages, predicted_labels, labels):
             'accuracy']
         table.append((evaluation_language, evaluation_language_accuracy, len(evaluation_language_labels)))
     print(tabulate(table, headers=headers, tablefmt="pretty"))
+
+
+def pprint_confusion_matrix(conf_matrix):
+    df_cm = pd.DataFrame(conf_matrix)
+    fig = plt.figure(figsize=(15, 10))
+    axes = fig.add_subplot(111)
+    sn.set(font_scale=1.4)  # for label size
+    sn.heatmap(df_cm, annot=True, annot_kws={"size": 13})  # font size
+    axes.set_xlabel('Predicted labels')
+    axes.set_ylabel('True labels')
+    axes.set_title('Confusion Matrix')
+    axes.xaxis.set_ticklabels(['Entailment', 'Neutral', 'Contradiction'])
+    axes.yaxis.set_ticklabels(['Entailment', 'Neutral', 'Contradiction'])
+    plt.savefig("XLM-R_Seq_CLS_model_confusion_matrix.png")
+    plt.show()
