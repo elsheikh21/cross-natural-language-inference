@@ -4,7 +4,7 @@ import os
 import torch
 from model import Model
 from transformers import AutoTokenizer
-from hw3.stud.models import HyperParameters, XLMR_Model
+from stud.models import HyperParameters, XLMR_Model
 
 
 def build_model(device: str) -> Model:
@@ -33,13 +33,12 @@ class StudentModel(Model):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, do_lower_case=True)
 
         self.hp = HyperParameters(model_name_='XLM-R_Seq_CLS', vocab=None,
-                                  label_vocab=self.label2idx, embeddings_=None, batch_size_=8)
+                                  label_vocab=self.label2idx, embeddings_=None, batch_size_=8)                                                                                                                                          
         self.model = XLMR_Model(hparams=self.hp, model_name=model_name, freeze_model=False).to(self.device)
 
     def predict(self, languages: List[str], premises: List[str], hypotheses: List[str]) -> List[str]:
         """
         STUDENT: implement here your predict function
-
         Args:
             languages (list): list of languages
             premises (list): list of premises
@@ -47,24 +46,21 @@ class StudentModel(Model):
 
         Returns:
             list: predicted labels
-
         """
         # Load the model
         model_path = os.path.join(os.getcwd(), 'model', 'XLM-R_Seq_CLS_ckpt_best.pth')
         self.model.load_(path=model_path)
+
         # Encode the dataset passed to the model
-        # for lang_, premise_, hypothesis_ in zip(self.languages, self.premises, self.hypotheses):
         encoded_dict = self.tokenizer.encode_plus(text=premises, text_pair=hypotheses,
                                                   add_special_tokens=True, return_token_type_ids=True,
-                                                  return_attention_mask=True, max_length=128, truncation=True,
+                                                  return_attention_mask=True, truncation=True, max_length=128,
                                                   pad_to_max_length=True, return_tensors='pt')
-        seq = torch.squeeze(encoded_dict["input_ids"]).to(self.device)
-        mask = torch.squeeze(encoded_dict["attention_mask"]).to(self.device)
-        tokens_type = torch.squeeze(encoded_dict["token_type_ids"]).to(self.device)
+        seq = torch.LongTensor(encoded_dict["input_ids"]).to(self.device)
+        mask = torch.LongTensor(encoded_dict["attention_mask"]).to(self.device)
+        tokens_type = torch.LongTensor(encoded_dict["token_type_ids"]).to(self.device)
 
         # Predict data from model
         predicted_labels = self.model.predict_sentence_(seq, mask, tokens_type)
-        return predicted_labels
-
-        # FIXME: TEST IMPLEMENTATION
-        # FIXME: CHECK IF SEQUENCES ARE PASSED INDIVIDUALLY OR IN BATCHES
+        return [self.idx2label.get(tag) for tag in predicted_labels]
+        # FIXME: pyarrow.lib.ArrowInvalid: Column 1 named references expected length 2349 but got length 75150

@@ -1,1 +1,1 @@
-from evaluater.eval import compute_metrics
+from stud.evaluater.eval import compute_metrics

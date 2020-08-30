@@ -557,17 +557,15 @@ class XLMR_Model(nn.Module):
         Loads the model and its state dictionary
         Args: path (str): [Model's state dict is located]
         """
-        state_dict = torch.load(path) if self.device == 'cuda' else torch.load(path, map_location=self.device)
+        state_dict = torch.load(path) if self._device == 'cuda' else torch.load(path, map_location=self._device)
         self.load_state_dict(state_dict)
 
     def predict_sentence_(self, seq, mask, tokens_type):
-        predicted_labels = []
         self.eval()
         with torch.no_grad():
             predictions = self(seq, mask, tokens_type)
             _, argmax = torch.max(predictions, dim=-1)
-            predicted_labels.append(argmax.tolist())
-        return predicted_labels
+        return argmax.tolist()
 
     def print_summary(self, show_weights=False, show_parameters=False):
         """
