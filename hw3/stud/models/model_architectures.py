@@ -561,11 +561,13 @@ class XLMR_Model(nn.Module):
         self.load_state_dict(state_dict)
 
     def predict_sentence_(self, seq, mask, tokens_type):
+        predicted_labels = []
         self.eval()
         with torch.no_grad():
             predictions = self(seq, mask, tokens_type)
             _, argmax = torch.max(predictions, dim=-1)
-        return argmax.tolist()
+            predicted_labels.extend(argmax.tolist())
+        return predicted_labels
 
     def print_summary(self, show_weights=False, show_parameters=False):
         """
