@@ -1,16 +1,16 @@
-import nlp
-import time
 import logging
 import os
+import time
 
+import nlp
+import pkbar
 import torch
+from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm.auto import tqdm
-from utils import compute_epoch_time
 from train.earlystopping import EarlyStopping
-from torch.nn.utils import clip_grad_norm_
 from transformers import get_linear_schedule_with_warmup
-import pkbar
+from utils import compute_epoch_time
 
 
 class Trainer:
@@ -521,7 +521,7 @@ class XLMRTrainer:
 
                 sample_loss = self.loss_function(logits, labels_)
                 sample_loss.backward()
-                # clip_grad_norm_(self.model.parameters(), 1.)  # Gradient Clipping
+                clip_grad_norm_(self.model.parameters(), 1.)  # Gradient Clipping
                 self.optimizer.step()
                 epoch_loss += sample_loss.tolist()
                 epoch_acc += acc_.tolist()
@@ -592,4 +592,4 @@ class XLMRTrainer:
         for state in self.optimizer.state.values():
             for k, v in state.items():
                 if isinstance(v, torch.Tensor):
-                    state[k] = v.to(device)
+                    state[k] = v.to(self.device)
