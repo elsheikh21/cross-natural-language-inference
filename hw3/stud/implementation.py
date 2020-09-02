@@ -55,11 +55,11 @@ class StudentModel(Model):
             list: predicted labels
         """
         # Encode the dataset passed to the model
-        encoded_dict = self.tokenizer.bath_encode_plus([(p, h) for p, h in zip(premises, hypotheses)],
-                                                       add_special_tokens=True, return_token_type_ids=True,
-                                                       return_attention_mask=True, truncation=True,
-                                                       max_length=128, pad_to_max_length=True,
-                                                       return_tensors='pt')
+        encoded_dict = self.tokenizer.batch_encode_plus([(p, h) for p, h in zip(premises, hypotheses)],
+                                                        add_special_tokens=True, return_token_type_ids=True,
+                                                        return_attention_mask=True, truncation=True,
+                                                        max_length=128, pad_to_max_length=True,
+                                                        return_tensors='pt')
         seq = torch.LongTensor(encoded_dict["input_ids"]).to(self.device)
         mask = torch.LongTensor(encoded_dict["attention_mask"]).to(self.device)
         tokens_type = torch.LongTensor(encoded_dict["token_type_ids"]).to(self.device)
